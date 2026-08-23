@@ -40,3 +40,31 @@ supabase link --project-ref <tu-project-ref>
 ```
 
 Esto actualiza `project_id` en `supabase/config.toml` y permite ejecutar `supabase db push` / `supabase db pull` en local.
+
+## 5. Conexión de Tableau por token (rol de solo lectura)
+
+Para que Tableau lea los KPIs sin usar la contraseña maestra de la base de datos, la migración `supabase/migrations/20260823120000_create_tableau_reader_role.sql` crea un rol dedicado `tableau_reader`:
+
+- Solo tiene permiso `SELECT` sobre el esquema `public` (incluidas las tablas que se creen en el futuro).
+- Tiene un `statement_timeout` de 30s para que un informe pesado no bloquee la base de datos.
+- No tiene contraseña definida en el código — nunca se commitea una credencial.
+
+**Pasos para activarlo:**
+
+1. Aplica la migración (vía la integración nativa, la Action de CI, o manualmente):
+   ```bash
+   supabase db push
+   ```
+2. Genera y asigna una contraseña al rol desde el **SQL Editor** del dashboard de Supabase:
+   ```sql
+   alter role tableau_reader with password '<contraseña-fuerte-generada>';
+   ```
+   Esa contraseña es el "token" que le das a Tableau — guárdala en un gestor de secretos, no en el repo.
+3. En Supabase, ve a **Project Settings → Database → Connection string** y copia los datos del **Session Pooler** (recomendado para herramientas de BI como Tableau, que mantienen conexiones abiertas):
+   - Host: `aws-<region>.pooler.supabase.com`
+   - Port: `5432` (session) o `6543` (transaction)
+   - Database: `postgres`
+   - User: `tableau_reader.<project-ref>`
+   - Password: la que asignaste en el paso 2
+4. En Tableau, elige el conector **PostgreSQL** e introduce esos datos. Activa **Require SSL**.
+5. Para rotar el acceso en cualquier momento, cambia la contraseña con el mismo comando `alter role` del paso 2 — no hace falta tocar nada en el repositorio.
