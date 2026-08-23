@@ -1,0 +1,42 @@
+\
+# Supabase local development config.
+# Generated as a starting point for `diego-pbm/kpis` — adjust project_id once
+# the project is linked (`supabase link --project-ref <ref>`).
+
+project_id = "kpis"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = false
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = []
+jwt_expiry = 3600
+enable_signup = true
+
+[edge_runtime]
+enabled = true
+
+[analytics]
+enabled = false
