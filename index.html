@@ -46,6 +46,12 @@ button.primary:hover{filter:brightness(1.06)}
 button[aria-pressed="true"]{background:var(--wash);border-color:var(--axis);font-weight:600}
 select{font:inherit;color:var(--text-primary);background:var(--surface-1);
   border:1px solid var(--border);border-radius:8px;padding:7px 10px;min-width:160px;max-width:300px}
+input[type=text],input[type=tel]{font:inherit;color:var(--text-primary);background:var(--surface-1);
+  border:1px solid var(--border);border-radius:8px;padding:7px 10px}
+.rulecard{display:flex;flex-direction:column;gap:6px}
+.rulecard .row2{display:flex;gap:6px}
+.rulecard select{min-width:0;flex:1}
+.rulecard input[type=text]{width:90px}
 .fld{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-secondary)}
 /* ---- selector múltiple de turnos ---- */
 .pickbtn{min-width:240px;max-width:320px;text-align:left;display:flex;align-items:center;
@@ -225,6 +231,47 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background
       <button class="primary" id="bake">Guardar copia para compartir (con los datos dentro)</button>
       <div class="hint" style="margin-top:8px">Genera un único .html que ya contiene estos datos: quien lo abra ve
         los KPIs directamente, sin tener que cargar ningún CSV. Los filtros siguen funcionando.</div>
+    </div>
+  </section>
+
+  <section id="alertsSec" class="hidden">
+    <h2>Avisos por WhatsApp y Telegram</h2>
+    <div class="card">
+      <div class="hint">Configura cómo avisarte cuando un KPI cruce un umbral. Token, chat y número se guardan
+        solo en este navegador (localStorage). El resto de la app sigue sin enviar tus datos a ningún sitio;
+        esto es lo único que sale de tu ordenador, y solo cuando pulsas «Enviar».</div>
+
+      <div class="subhead">Telegram — bot propio, envío automático y gratis</div>
+      <div class="filters">
+        <label class="fld">Token del bot <input type="text" id="tgToken" placeholder="123456789:AAF…" style="min-width:260px"></label>
+        <label class="fld">Chat ID <input type="text" id="tgChat" placeholder="123456789" style="min-width:140px"></label>
+        <button id="tgSave">Guardar</button>
+        <button id="tgTest">Enviar prueba</button>
+      </div>
+      <div class="hint">Crea un bot hablando con <code>@BotFather</code> en Telegram (<code>/newbot</code>) y copia el
+        token. Para el Chat ID: escríbele algo a tu bot y abre en el navegador
+        <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> — ahí aparece como <code>"chat":{"id":…}</code>.</div>
+      <div id="tgStatus" class="hint">&nbsp;</div>
+
+      <div class="subhead">WhatsApp — gratis, con un clic (sin API de pago)</div>
+      <div class="filters">
+        <label class="fld">Tu número con prefijo país <input type="tel" id="waPhone" placeholder="34600111222" style="min-width:200px"></label>
+        <button id="waSave">Guardar</button>
+        <button id="waTest">Probar</button>
+      </div>
+      <div class="hint">WhatsApp no ofrece envío automático gratis a un número personal: se abre WhatsApp (app o web)
+        con el mensaje ya escrito y solo falta pulsar enviar. Deja el número vacío para elegir el chat cada vez.</div>
+
+      <div class="subhead">Reglas de aviso por KPI</div>
+      <div class="grid3" id="ruleGrid"></div>
+
+      <div style="margin-top:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button class="primary" id="checkAlerts">Comprobar avisos con el filtro actual</button>
+        <button id="sendSummaryTg">Enviar resumen actual por Telegram</button>
+        <button id="sendSummaryWa">Enviar resumen actual por WhatsApp</button>
+        <span class="hint" id="alertSummary"></span>
+      </div>
+      <div id="alertResults" style="margin-top:12px"></div>
     </div>
   </section>
 
@@ -590,7 +637,7 @@ function finishSetup(remap){
   rebuild(remap===undefined?true:remap);
   document.getElementById('drop').classList.add('hidden');
   document.getElementById('structWrap').classList.remove('hidden');
-  ['filterSec','tilesSec','cardsSec'].forEach(id=>document.getElementById(id).classList.remove('hidden'));
+  ['filterSec','tilesSec','cardsSec','alertsSec'].forEach(id=>document.getElementById(id).classList.remove('hidden'));
   document.getElementById('setup').open=false;
 }
 
@@ -895,7 +942,7 @@ function render(){
       ${S.weightMap?'«'+S.weightMap+'»':'—'}</b>; <b>Request</b> y <b>Total Wh</b> como <b>suma</b>.
       ${S.weightMap?'':'<br>No hay fila de peso asignada, así que los ratios salen como media simple: asígnala en el bloque de arriba («Peso para las medias»).'}</div>`;
   } else mn.innerHTML='';
-  renderTiles(); renderCards();
+  renderTiles(); renderCards(); renderAlertResults();
 }
 function renderTiles(){
   const box=document.getElementById('tiles'); box.innerHTML='';
@@ -1080,12 +1127,17 @@ function exportSelfContained(){
   const doc=document.documentElement.cloneNode(true);
   const q=s=>doc.querySelector(s);
   ['#tiles','#cards','#structGrid','#kpiGrid','#diagBody','#turnoAudit','#mapWarn','#errBox',
-   '#fCity','#fTurno','#fFrom','#fTo','#filterInfo','#layoutNote'].forEach(s=>{ const n=q(s); if(n) n.innerHTML=''; });
+   '#fCity','#fTurno','#fFrom','#fTo','#filterInfo','#layoutNote',
+   '#ruleGrid','#alertResults'].forEach(s=>{ const n=q(s); if(n) n.innerHTML=''; });
   q('#setupSum').textContent='Cargando los datos incrustados…';
   q('#errBox').className='card hidden';
   q('#drop').className='';
   q('#structWrap').className='card hidden';
-  ['#filterSec','#tilesSec','#cardsSec'].forEach(s=>q(s).className='hidden');
+  ['#filterSec','#tilesSec','#cardsSec','#alertsSec'].forEach(s=>q(s).className='hidden');
+  // nunca lleves credenciales de avisos en la copia que se comparte
+  ['#tgToken','#tgChat','#waPhone'].forEach(s=>{ const n=q(s); if(n) n.removeAttribute('value'); });
+  const asum=q('#alertSummary'); if(asum) asum.textContent='';
+  const tst=q('#tgStatus'); if(tst) tst.innerHTML='&nbsp;';
   q('#setup').setAttribute('open','');
   q('#pasteBox').className='hidden';
   const stamp=new Date().toLocaleString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
@@ -1128,6 +1180,115 @@ function bootBaked(d){
   buildFilterUI(); render();
 }
 
+/* ---------- Avisos: WhatsApp (gratis, con un clic) y Telegram (bot propio) ----
+   Todo lo demás en esta página nunca sale del navegador; esto es lo único que
+   sí sale, y solo cuando el usuario pulsa un botón de «Enviar».
+   - Telegram: envío automático real, vía la Bot API oficial (fetch directo,
+     admite CORS), con el token y chat_id de un bot propio.
+   - WhatsApp: no existe un envío automático gratuito a un número personal, así
+     que se abre wa.me con el texto ya escrito; falta pulsar «Enviar» a mano.
+   Token, chat id y teléfono se guardan solo en localStorage de este navegador,
+   y nunca se incluyen en la copia autocontenida para compartir (ver arriba). */
+function loadAlerts(){
+  let saved={};
+  try{ saved=JSON.parse(localStorage.getItem('kpiAlerts')||'{}'); }catch(e){}
+  const rules={};
+  KPIS.forEach(k=>{ const r=(saved.rules||{})[k.id]; rules[k.id]=r?{on:!!r.on,cond:r.cond==='gt'?'gt':'lt',value:r.value||''}:{on:false,cond:'lt',value:''}; });
+  S.alerts={ tgToken:saved.tgToken||'', tgChat:saved.tgChat||'', waPhone:saved.waPhone||'', rules };
+}
+function saveAlerts(){ try{ localStorage.setItem('kpiAlerts',JSON.stringify(S.alerts)); }catch(e){} }
+function buildRuleGrid(){
+  const g=document.getElementById('ruleGrid'); g.innerHTML='';
+  KPIS.forEach(k=>{
+    const r=S.alerts.rules[k.id];
+    const wrap=document.createElement('div'); wrap.className='fld rulecard';
+    wrap.innerHTML=`<label style="display:flex;align-items:center;gap:7px;cursor:pointer">
+        <input type="checkbox" ${r.on?'checked':''}>
+        <span class="key" style="width:9px;height:9px;border-radius:2px;background:var(${k.hue});display:inline-block"></span>${k.label}</label>
+      <div class="row2">
+        <select><option value="lt" ${r.cond==='lt'?'selected':''}>por debajo de</option>
+          <option value="gt" ${r.cond==='gt'?'selected':''}>por encima de</option></select>
+        <input type="text" inputmode="decimal" placeholder="umbral" value="${clean(r.value).replace(/"/g,'&quot;')}">
+      </div>`;
+    g.appendChild(wrap);
+    const chk=wrap.querySelector('input[type=checkbox]'), sel=wrap.querySelector('select'), inp=wrap.querySelector('input[type=text]');
+    const upd=()=>{ r.on=chk.checked; r.cond=sel.value; r.value=inp.value; saveAlerts(); renderAlertResults(); };
+    chk.addEventListener('change',upd); sel.addEventListener('change',upd); inp.addEventListener('input',upd);
+  });
+}
+function lastValue(kid){
+  const s=seriesOf(kid).filter(p=>p.v!==null);
+  return s.length?s[s.length-1]:null;
+}
+function evalAlerts(){
+  const out=[];
+  if(!S.city||!S.turnos.length) return out;
+  KPIS.forEach(k=>{
+    const r=S.alerts.rules[k.id];
+    if(!r||!r.on||!S.kpiMap[k.id]) return;
+    const th=parseFloat(String(r.value).replace(',','.'));
+    if(isNaN(th)) return;
+    const last=lastValue(k.id); if(!last) return;
+    const hit = r.cond==='lt' ? last.v<th : last.v>th;
+    if(hit) out.push({kid:k.id,label:k.label,v:last.v,cond:r.cond,th,iso:last.iso});
+  });
+  return out;
+}
+function alertMessage(hits){
+  const head=`⚠️ Avisos KPIs — ${S.city} · ${turnoTxt()}`;
+  const lines=hits.map(h=>`• ${h.label}: ${fmtK(h.kid,h.v)} (${h.cond==='lt'?'por debajo de':'por encima de'} ${fmt(h.th,2)}) — ${dFull(h.iso)}`);
+  return [head,...lines].join('\n');
+}
+function summaryMessage(){
+  const head=`📊 KPIs — ${S.city||'—'} · ${S.turnos.length?turnoTxt():'—'}${S.to?' · '+dFull(S.to):''}`;
+  const lines=KPIS.filter(k=>S.kpiMap[k.id]).map(k=>{
+    const last=lastValue(k.id);
+    return `• ${k.label}: ${last?fmtK(k.id,last.v):'—'}`;
+  });
+  return lines.length ? [head,...lines].join('\n') : head+'\n(sin datos cargados todavía)';
+}
+function renderAlertResults(){
+  const box=document.getElementById('alertResults'); if(!box) return;
+  const hits=evalAlerts();
+  const sum=document.getElementById('alertSummary');
+  sum.textContent = !S.city ? '' : hits.length
+    ? `${hits.length} aviso${hits.length===1?'':'s'} activo${hits.length===1?'':'s'} con el filtro actual`
+    : 'sin avisos activos con el filtro actual';
+  if(!hits.length){ box.innerHTML=''; return; }
+  box.innerHTML = `<div class="warn">${hits.map(h=>
+      `<b>${h.label}</b>: ${fmtK(h.kid,h.v)} (${h.cond==='lt'?'por debajo de':'por encima de'} ${fmt(h.th,2)}) — ${dFull(h.iso)}`
+    ).join('<br>')}</div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="primary" id="sendTgAlert">Enviar estos avisos por Telegram</button>
+      <button id="sendWaAlert">Enviar estos avisos por WhatsApp</button>
+    </div>`;
+  document.getElementById('sendTgAlert').addEventListener('click',()=>sendTelegram(alertMessage(hits)));
+  document.getElementById('sendWaAlert').addEventListener('click',()=>openWhatsApp(alertMessage(hits)));
+}
+async function sendTelegram(text){
+  const status=document.getElementById('tgStatus');
+  const token=clean(S.alerts.tgToken), chat=clean(S.alerts.tgChat);
+  if(!token||!chat){ status.textContent='Falta el token del bot o el Chat ID.'; return; }
+  status.textContent='Enviando…';
+  try{
+    const r=await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({chat_id:chat,text})
+    });
+    const j=await r.json().catch(()=>({}));
+    status.textContent = j.ok ? 'Enviado ✓ ('+new Date().toLocaleTimeString('es-ES')+')'
+      : 'Error de Telegram: '+(j.description||('HTTP '+r.status));
+  }catch(e){
+    status.textContent='Error de red: '+e.message+' (revisa el token, el chat id o tu conexión)';
+  }
+}
+function openWhatsApp(text){
+  const phone=clean(S.alerts.waPhone).replace(/[^\d]/g,'');
+  const url = phone ? `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+                     : `https://wa.me/?text=${encodeURIComponent(text)}`;
+  window.open(url,'_blank','noopener');
+}
+
 /* ---------- Eventos ----------------------------------------------------- */
 const el=id=>document.getElementById(id);
 el('bake').addEventListener('click',()=>{
@@ -1145,7 +1306,7 @@ const drop=el('drop');
 drop.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f) readFile(f); });
 el('reset').addEventListener('click',()=>{
   el('drop').classList.remove('hidden'); el('structWrap').classList.add('hidden');
-  ['filterSec','tilesSec','cardsSec'].forEach(id=>el(id).classList.add('hidden'));
+  ['filterSec','tilesSec','cardsSec','alertsSec'].forEach(id=>el(id).classList.add('hidden'));
   el('setupSum').textContent='Cargar archivo y comprobar columnas';
   el('setup').open=true; el('file').value=''; clearError();
 });
@@ -1184,6 +1345,27 @@ el('theme').addEventListener('click',()=>{
   if(S.matrix.length) render();
 });
 let rt; addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>{if(S.matrix.length)renderCards();},180);});
+
+/* --- panel de Avisos: cargar config guardada y enganchar botones --- */
+loadAlerts();
+el('tgToken').value=S.alerts.tgToken; el('tgChat').value=S.alerts.tgChat; el('waPhone').value=S.alerts.waPhone;
+buildRuleGrid();
+el('tgSave').addEventListener('click',()=>{
+  S.alerts.tgToken=el('tgToken').value.trim(); S.alerts.tgChat=el('tgChat').value.trim();
+  saveAlerts(); el('tgStatus').textContent='Guardado.';
+});
+el('tgTest').addEventListener('click',()=>{
+  S.alerts.tgToken=el('tgToken').value.trim(); S.alerts.tgChat=el('tgChat').value.trim();
+  saveAlerts(); sendTelegram('✅ Prueba desde el Dashboard de KPIs.');
+});
+el('waSave').addEventListener('click',()=>{ S.alerts.waPhone=el('waPhone').value.trim(); saveAlerts(); });
+el('waTest').addEventListener('click',()=>{
+  S.alerts.waPhone=el('waPhone').value.trim(); saveAlerts();
+  openWhatsApp('✅ Prueba desde el Dashboard de KPIs.');
+});
+el('checkAlerts').addEventListener('click',renderAlertResults);
+el('sendSummaryTg').addEventListener('click',()=>sendTelegram(summaryMessage()));
+el('sendSummaryWa').addEventListener('click',()=>openWhatsApp(summaryMessage()));
 
 /* ---------- Datos de ejemplo (forma B, la de tu último export) ---------- */
 el('demo').addEventListener('click',()=>{
