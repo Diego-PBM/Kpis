@@ -168,6 +168,11 @@ async function registerEsemtiaOrigin(originPattern){
     id: 'esemtia-content',
     js: ['src/content.js'],
     matches: [originPattern],
+    // Muchas plataformas de gestión escolar (esemtia incluida) cargan la
+    // bandeja de mensajes dentro de un <iframe>. Sin allFrames:true el botón
+    // flotante nunca aparecería al seleccionar texto dentro de ese fotograma.
+    allFrames: true,
+    matchOriginAsFallback: true,
     runAt: 'document_idle'
   }]);
 }
