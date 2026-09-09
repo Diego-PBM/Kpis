@@ -237,10 +237,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 /* --------------------------- menú contextual -------------------------------- */
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: 'esemtia-sync-selection',
-    title: 'Crear evento en Google Calendar desde esta selección',
-    contexts: ['selection']
+  // removeAll primero: chrome.contextMenus.create() falla en silencio
+  // ("Cannot create item with duplicate id") si el menú de una recarga
+  // anterior seguía registrado, y sin comprobar chrome.runtime.lastError
+  // ese fallo pasa desapercibido y el menú nunca llega a aparecer.
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'esemtia-sync-selection',
+      title: 'Crear evento en Google Calendar desde esta selección',
+      contexts: ['selection']
+    }, () => {
+      if(chrome.runtime.lastError) console.error('No se pudo crear el menú contextual:', chrome.runtime.lastError.message);
+    });
   });
 });
 chrome.contextMenus.onClicked.addListener(async (info) => {
