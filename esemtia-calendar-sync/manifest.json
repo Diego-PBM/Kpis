@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "esemtia → Google Calendar",
+  "version": "1.0.0",
+  "description": "Convierte mensajes de esemtia Connect en eventos de Google Calendar con la alerta adecuada según su cadencia o plazo.",
+  "default_locale": "es",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "src/options.html",
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "identity",
+    "storage",
+    "scripting",
+    "contextMenus",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://www.googleapis.com/*",
+    "https://accounts.google.com/*"
+  ],
+  "optional_host_permissions": [
+    "*://*/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
