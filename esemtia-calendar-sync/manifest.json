@@ -3,7 +3,6 @@
   "name": "esemtia → Google Calendar",
   "version": "1.0.0",
   "description": "Convierte mensajes de esemtia Connect en eventos de Google Calendar con la alerta adecuada según su cadencia o plazo.",
-  "default_locale": "es",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
