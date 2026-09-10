@@ -8,6 +8,8 @@ async function init(){
   const cfg = (await send('GET_CONFIG')).data;
   $('clientId').value = cfg.clientId || '';
   $('esemtiaOrigin').value = cfg.esemtiaOrigin || '';
+  $('aiApiKey').value = cfg.aiApiKey || '';
+  $('aiModel').value = cfg.aiModel || 'claude-sonnet-5';
   if(cfg.autoScan){
     $('listSelector').value = cfg.autoScan.listSelector || '';
     $('textSelector').value = cfg.autoScan.textSelector || '';
@@ -58,6 +60,21 @@ $('grantOrigin').addEventListener('click', async () => {
   const res = await send('REGISTER_ORIGIN', {originPattern: pattern});
   if(res.ok) showStatus($('originStatus'), true, '✅ Permiso concedido. Recarga la pestaña de esemtia Connect.');
   else showStatus($('originStatus'), false, '❌ '+res.error);
+});
+
+$('saveAi').addEventListener('click', async () => {
+  await send('SET_CONFIG', {patch:{
+    aiApiKey: $('aiApiKey').value.trim(),
+    aiModel: $('aiModel').value.trim() || 'claude-sonnet-5'
+  }});
+  showStatus($('aiStatus'), true, 'Configuración de IA guardada.');
+});
+
+$('testAi').addEventListener('click', async () => {
+  showStatus($('aiStatus'), true, 'Probando…');
+  const res = await send('AI_TEST');
+  if(res.ok) showStatus($('aiStatus'), true, `✅ IA funcionando. Ejemplo detectado: ${res.data.events.length} evento(s).`);
+  else showStatus($('aiStatus'), false, '❌ '+res.error);
 });
 
 $('saveAutoScan').addEventListener('click', async () => {

@@ -5,24 +5,31 @@
    - Autenticar con Google (OAuth "implicit flow" vía chrome.identity.launchWebAuthFlow,
      sin necesidad de client secret ni de publicar la extensión).
    - Hablar con la API de Google Calendar (listar calendarios, crear/actualizar eventos).
-   - Evitar duplicados: cada evento se etiqueta con un hash del texto de origen en
-     extendedProperties.private, así reenviar el mismo mensaje actualiza el evento
-     en vez de crear uno nuevo.
+   - Extraer eventos de un mensaje: con IA (Claude, lee el correo completo +
+     adjuntos jpg/pdf y decide cuántos eventos hay, de qué hijo, y su
+     fecha/cadencia) si hay clave configurada, o si no con el motor de reglas
+     local (parser.js) como respaldo sin coste ni dependencias externas.
+   - Evitar duplicados: cada evento se etiqueta con un hash del texto de origen
+     (+ su índice, si un mismo correo produce varios eventos) en
+     extendedProperties.private, así reenviar el mismo mensaje actualiza el
+     evento en vez de crear uno nuevo.
    - Registrar dinámicamente el content script sobre el dominio de esemtia que el
      usuario indique en Opciones (no conocemos ese dominio de antemano).
    - Menú contextual "Crear evento…" sobre cualquier texto seleccionado, funcione o
      no el content script en esa página.
    ========================================================================== */
 import { parseMessage, suggestTitle } from './parser.js';
+import { extractEventsWithAI } from './ai.js';
 
 const CAL_API = 'https://www.googleapis.com/calendar/v3';
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const MAX_DESCRIPTION_CHARS = 8000;
 
 /* ---------------------------- configuración ------------------------------ */
 async function getConfig(){
   const {config} = await chrome.storage.sync.get('config');
-  return Object.assign({clientId:'', calendarId:'primary', esemtiaOrigin:''}, config||{});
+  return Object.assign({clientId:'', calendarId:'primary', esemtiaOrigin:'', aiApiKey:'', aiModel:'claude-sonnet-5'}, config||{});
 }
 async function setConfig(patch){
   const cur = await getConfig();
@@ -90,10 +97,11 @@ async function sha256Hex(text){
   return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 
-function buildEventBody({title, description, parsed, hash}){
+function buildEventBody({title, description, child, parsed, hash}){
+  const fullDescription = (child ? `👤 ${child}\n\n` : '') + String(description||'').slice(0, MAX_DESCRIPTION_CHARS);
   const body = {
     summary: title,
-    description,
+    description: fullDescription,
     extendedProperties: {private: {esemtiaHash: hash}}
   };
   if(parsed.allDay){
@@ -132,34 +140,63 @@ async function findEventByHash(calendarId, hash){
   return (data.items||[])[0] || null;
 }
 
-async function syncMessageToCalendar({text, referenceDate, override}){
+/**
+ * Extrae uno o varios eventos candidatos de un mensaje.
+ * Usa IA (Claude) si hay clave configurada; si no, o si la llamada falla,
+ * cae al motor de reglas local (un único evento, sin coste ni red externa).
+ */
+async function extractEvents({text, images, childHint, referenceDate}){
   const cfg = await getConfig();
-  const calendarId = (override&&override.calendarId) || cfg.calendarId || 'primary';
-  const parsed = Object.assign({}, parseMessage(text, {referenceDate}), override && override.parsed || {});
-  if(!parsed.date) throw new Error('Falta la fecha del evento: no se detectó ninguna en el texto y no se indicó una a mano.');
-  const title = (override && override.title) || suggestTitle(text);
-  const hash = await sha256Hex(text);
+  if(cfg.aiApiKey){
+    try{
+      const result = await extractEventsWithAI({
+        apiKey: cfg.aiApiKey, model: cfg.aiModel, text, childHint, attachments: images, referenceDate
+      });
+      return {source:'ai', child: result.child, events: result.events, warning: null};
+    }catch(err){
+      const local = localExtract(text, referenceDate);
+      return {source:'local', child: childHint||null, events: local,
+        warning: 'La extracción con IA falló, se han aplicado las reglas locales: '+(err.message||err)};
+    }
+  }
+  return {source:'local', child: childHint||null, events: localExtract(text, referenceDate)};
+}
+function localExtract(text, referenceDate){
+  const parsed = parseMessage(text, {referenceDate});
+  return [{
+    title: suggestTitle(text),
+    date: parsed.date, time: parsed.time, allDay: parsed.allDay,
+    recurrence: parsed.recurrence, reminders: parsed.reminders,
+    confidence: parsed.confidence, matchedText: parsed.matchedText
+  }];
+}
+
+async function syncOneEvent({text, eventIndex, calendarId, title, child, parsed}){
+  if(!parsed || !parsed.date) throw new Error('Falta la fecha del evento: no se detectó ninguna y no se indicó una a mano.');
+  const cfg = await getConfig();
+  const calId = calendarId || cfg.calendarId || 'primary';
+  const hash = await sha256Hex(`${text}::${eventIndex||0}`);
 
   const {syncIndex} = await chrome.storage.local.get('syncIndex');
   const idx = syncIndex || {};
   let existing = idx[hash];
-  if(!existing) existing = await findEventByHash(calendarId, hash).catch(()=>null);
+  if(!existing) existing = await findEventByHash(calId, hash).catch(()=>null);
 
-  const body = buildEventBody({title, description: text, parsed, hash});
+  const body = buildEventBody({title, description: text, child, parsed, hash});
   let event;
   if(existing && existing.id){
-    event = await authedFetch(`/calendars/${encodeURIComponent(calendarId)}/events/${existing.id}`, {
+    event = await authedFetch(`/calendars/${encodeURIComponent(calId)}/events/${existing.id}`, {
       method:'PATCH', body: JSON.stringify(body)
     });
   } else {
-    event = await authedFetch(`/calendars/${encodeURIComponent(calendarId)}/events`, {
+    event = await authedFetch(`/calendars/${encodeURIComponent(calId)}/events`, {
       method:'POST', body: JSON.stringify(body)
     });
   }
 
-  idx[hash] = {id: event.id, calendarId, title, htmlLink: event.htmlLink, syncedAt: Date.now(), kind: parsed.kind};
+  idx[hash] = {id: event.id, calendarId: calId, title, htmlLink: event.htmlLink, syncedAt: Date.now()};
   await chrome.storage.local.set({syncIndex: idx});
-  return {event, parsed, hash};
+  return {event, hash};
 }
 
 /* --------------------------- registro dinámico ---------------------------- */
@@ -190,10 +227,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ok:true});
           break;
         }
+        case 'AI_TEST': {
+          const cfg = await getConfig();
+          const r = await extractEventsWithAI({
+            apiKey: cfg.aiApiKey, model: cfg.aiModel,
+            text: 'Reunión de padres el 15 de octubre a las 17:00 en el aula 3.'
+          });
+          sendResponse({ok:true, data:r});
+          break;
+        }
         case 'LIST_CALENDARS': sendResponse({ok:true, data: await listCalendars()}); break;
-        case 'PARSE': sendResponse({ok:true, data: parseMessage(msg.text, {referenceDate: msg.referenceDate})}); break;
+        case 'EXTRACT_EVENTS': {
+          const data = await extractEvents(msg.payload);
+          sendResponse({ok:true, data});
+          break;
+        }
         case 'SYNC_EVENT': {
-          const result = await syncMessageToCalendar(msg.payload);
+          const result = await syncOneEvent(msg.payload);
           sendResponse({ok:true, data: result});
           break;
         }
@@ -213,10 +263,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           break;
         }
         case 'OPEN_POPUP_WITH_TEXT': {
-          await chrome.storage.session.set({pendingMessage: {text: msg.text, capturedAt: Date.now()}});
+          await chrome.storage.session.set({pendingMessage: {
+            text: msg.text, images: msg.images||[], childHint: msg.childHint||null, capturedAt: Date.now()
+          }});
           try{ await chrome.action.openPopup(); }
           catch(e){
-            await chrome.windows.create({url: chrome.runtime.getURL('src/popup.html'), type:'popup', width:420, height:640});
+            await chrome.windows.create({url: chrome.runtime.getURL('src/popup.html'), type:'popup', width:460, height:680});
           }
           sendResponse({ok:true});
           break;
@@ -254,9 +306,9 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 chrome.contextMenus.onClicked.addListener(async (info) => {
   if(info.menuItemId==='esemtia-sync-selection' && info.selectionText){
-    await chrome.storage.session.set({pendingMessage: {text: info.selectionText, capturedAt: Date.now()}});
+    await chrome.storage.session.set({pendingMessage: {text: info.selectionText, images:[], childHint:null, capturedAt: Date.now()}});
     try{ await chrome.action.openPopup(); }
-    catch(e){ await chrome.windows.create({url: chrome.runtime.getURL('src/popup.html'), type:'popup', width:420, height:640}); }
+    catch(e){ await chrome.windows.create({url: chrome.runtime.getURL('src/popup.html'), type:'popup', width:460, height:680}); }
   }
 });
 

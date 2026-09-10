@@ -78,7 +78,36 @@
   </section>
 
   <section>
-    <h2>4) Escaneo automático de la bandeja (opcional, avanzado)</h2>
+    <h2>4) IA para leer correos completos (Claude, opcional pero recomendado)</h2>
+    <p>Sin esto, la extensión solo detecta con reglas simples una fecha por mensaje. Con una clave de la
+      API de Claude, lee el <b>correo completo</b> (no solo el fragmento seleccionado), identifica <b>a qué
+      hijo/alumno</b> se refiere y puede proponer <b>varios eventos</b> si el correo menciona varias
+      actividades — incluyendo lo que ponga en <b>imágenes o PDF adjuntos</b>.</p>
+    <ol>
+      <li>Crea una clave en <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com/settings/keys</a>.</li>
+      <li>Pégala aquí abajo. Se guarda solo en tu perfil de Chrome y se envía <b>directamente</b> a
+        <code>api.anthropic.com</code> (nunca a un servidor propio).</li>
+    </ol>
+    <div class="fld">
+      <label>Clave de la API de Claude (Anthropic)</label>
+      <input type="text" id="aiApiKey" placeholder="sk-ant-...">
+    </div>
+    <div class="fld">
+      <label>Modelo</label>
+      <input type="text" id="aiModel" placeholder="claude-sonnet-5">
+    </div>
+    <button class="primary" id="saveAi">Guardar</button>
+    <button id="testAi">Probar IA</button>
+    <div id="aiStatus" class="status hidden"></div>
+    <p style="color:#77756f;font-size:12px;margin-top:10px">
+      Coste: cada correo analizado es una llamada a la API de Claude (se cobra en tu propia cuenta de
+      Anthropic, unos céntimos por correo con adjuntos incluidos). Si dejas la clave vacía, la extensión
+      sigue funcionando con las reglas locales descritas más abajo, sin coste ni conexión externa.
+    </p>
+  </section>
+
+  <section>
+    <h2>5) Escaneo automático de la bandeja (opcional, avanzado)</h2>
     <p>Si conoces los selectores CSS de la lista de mensajes de esemtia, la extensión puede detectar cuántos mensajes hay sin necesidad de seleccionarlos uno a uno. Déjalo en blanco si no lo necesitas — el botón flotante al seleccionar texto siempre funciona.</p>
     <div class="fld">
       <label>Selector CSS de cada mensaje de la lista</label>
