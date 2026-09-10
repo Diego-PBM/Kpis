@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Configuración — esemtia → Calendar</title>
+<style>
+  :root{ color-scheme: light dark; }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;background:#f9f9f7;color:#0b0b0b}
+  @media (prefers-color-scheme: dark){ body{background:#0d0d0d;color:#fff} }
+  .wrap{max-width:640px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:20px;margin:0 0 6px}
+  h2{font-size:14px;margin:0 0 10px}
+  p.sub{color:#77756f;margin:0 0 24px}
+  section{background:rgba(127,127,127,.06);border:1px solid rgba(127,127,127,.2);border-radius:12px;
+    padding:16px 18px;margin-bottom:16px}
+  .fld{display:flex;flex-direction:column;gap:5px;margin-bottom:12px;font-size:12px;color:#77756f}
+  input[type=text],select{font:14px inherit;padding:8px 10px;border-radius:8px;
+    border:1px solid rgba(127,127,127,.35);background:transparent;color:inherit}
+  code{background:rgba(127,127,127,.15);padding:2px 6px;border-radius:5px;font-size:12.5px}
+  button{font:inherit;padding:8px 14px;border-radius:8px;border:1px solid rgba(127,127,127,.35);
+    background:transparent;color:inherit;cursor:pointer}
+  button.primary{background:#2a78d6;border-color:transparent;color:#fff;font-weight:600}
+  .status{margin-top:10px;padding:9px 11px;border-radius:8px;font-size:13px;background:rgba(127,127,127,.1)}
+  .ok{border-left:3px solid #1baf7a}
+  .err{border-left:3px solid #d9534f}
+  ol{padding-left:20px;color:#3a3a38}
+  ol li{margin-bottom:6px}
+  a{color:#2a78d6}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>⚙ Configuración</h1>
+  <p class="sub">Todo se guarda en tu perfil de Chrome (sincronizado si tienes el navegador vinculado a tu cuenta). Nada de esto sale hacia servidores propios: solo se habla directamente con Google.</p>
+
+  <section>
+    <h2>1) Cuenta de Google (OAuth)</h2>
+    <p>Crea un cliente OAuth gratuito en Google Cloud Console (una vez) y pega aquí su <b>Client ID</b>:</p>
+    <ol>
+      <li>Ve a <a href="https://console.cloud.google.com/apis/credentials" target="_blank">console.cloud.google.com/apis/credentials</a> y crea (o usa) un proyecto.</li>
+      <li>Habilita la <b>Google Calendar API</b> en «APIs y servicios → Biblioteca».</li>
+      <li>En «Pantalla de consentimiento OAuth», tipo <i>Externo</i>, añádete como usuario de prueba.</li>
+      <li>En «Credenciales → Crear credenciales → ID de cliente de OAuth», tipo <b>Aplicación web</b>.</li>
+      <li>En «URI de redirección autorizados» añade exactamente esto: <code id="redirectUri">…</code>
+        <button id="copyRedirect" style="margin-left:6px">Copiar</button></li>
+      <li>Pega aquí el <b>Client ID</b> generado (termina en <code>.apps.googleusercontent.com</code>).</li>
+    </ol>
+    <div class="fld">
+      <label>Client ID</label>
+      <input type="text" id="clientId" placeholder="xxxxxxxxxxxx.apps.googleusercontent.com">
+    </div>
+    <button class="primary" id="saveClientId">Guardar</button>
+    <button id="testAuth">Probar autenticación</button>
+    <div id="authStatus" class="status hidden"></div>
+  </section>
+
+  <section>
+    <h2>2) Calendario de destino</h2>
+    <div class="fld">
+      <label>Crear los eventos en</label>
+      <select id="calendarSelect"><option value="primary">Mi calendario principal</option></select>
+    </div>
+    <button id="refreshCalendars">Actualizar lista</button>
+    <button class="primary" id="saveCalendar">Guardar</button>
+  </section>
+
+  <section>
+    <h2>3) Sitio de esemtia Connect</h2>
+    <p>Autoriza el dominio donde abres esemtia Connect para poder usar el botón flotante «📅 Sincronizar» al seleccionar un mensaje.</p>
+    <div class="fld">
+      <label>URL de esemtia Connect (ej. https://connect.esemtia.com/*)</label>
+      <input type="text" id="esemtiaOrigin" placeholder="https://connect.esemtia.com/*">
+    </div>
+    <button class="primary" id="grantOrigin">Conceder acceso a este sitio</button>
+    <div id="originStatus" class="status hidden"></div>
+  </section>
+
+  <section>
+    <h2>4) IA para leer correos completos (Claude, opcional pero recomendado)</h2>
+    <p>Sin esto, la extensión solo detecta con reglas simples una fecha por mensaje. Con una clave de la
+      API de Claude, lee el <b>correo completo</b> (no solo el fragmento seleccionado), identifica <b>a qué
+      hijo/alumno</b> se refiere y puede proponer <b>varios eventos</b> si el correo menciona varias
+      actividades — incluyendo lo que ponga en <b>imágenes o PDF adjuntos</b>.</p>
+    <ol>
+      <li>Crea una clave en <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com/settings/keys</a>.</li>
+      <li>Pégala aquí abajo. Se guarda solo en tu perfil de Chrome y se envía <b>directamente</b> a
+        <code>api.anthropic.com</code> (nunca a un servidor propio).</li>
+    </ol>
+    <div class="fld">
+      <label>Clave de la API de Claude (Anthropic)</label>
+      <input type="text" id="aiApiKey" placeholder="sk-ant-...">
+    </div>
+    <div class="fld">
+      <label>Modelo</label>
+      <input type="text" id="aiModel" placeholder="claude-sonnet-5">
+    </div>
+    <button class="primary" id="saveAi">Guardar</button>
+    <button id="testAi">Probar IA</button>
+    <div id="aiStatus" class="status hidden"></div>
+    <p style="color:#77756f;font-size:12px;margin-top:10px">
+      Coste: cada correo analizado es una llamada a la API de Claude (se cobra en tu propia cuenta de
+      Anthropic, unos céntimos por correo con adjuntos incluidos). Si dejas la clave vacía, la extensión
+      sigue funcionando con las reglas locales descritas más abajo, sin coste ni conexión externa.
+    </p>
+  </section>
+
+  <section>
+    <h2>5) Escaneo automático de la bandeja (opcional, avanzado)</h2>
+    <p>Si conoces los selectores CSS de la lista de mensajes de esemtia, la extensión puede detectar cuántos mensajes hay sin necesidad de seleccionarlos uno a uno. Déjalo en blanco si no lo necesitas — el botón flotante al seleccionar texto siempre funciona.</p>
+    <div class="fld">
+      <label>Selector CSS de cada mensaje de la lista</label>
+      <input type="text" id="listSelector" placeholder="ej. .message-list .message-item">
+    </div>
+    <div class="fld">
+      <label>Selector CSS del texto dentro de cada mensaje (opcional)</label>
+      <input type="text" id="textSelector" placeholder="ej. .message-body">
+    </div>
+    <button class="primary" id="saveAutoScan">Guardar</button>
+  </section>
+
+  <section>
+    <h2>Cómo se decide la alerta</h2>
+    <p style="color:#3a3a38">La extensión busca en el texto del mensaje: fechas concretas (“15 de octubre”, “20/09”), plazos (“antes del…”, “fecha límite”, “antes de que acabe la semana”) y cadencias (“cada semana”, “todos los lunes”, “mensual”). Según lo que encuentre, propone:</p>
+    <ul style="color:#3a3a38">
+      <li><b>Fecha puntual con hora</b> → aviso 1 hora y 1 día antes.</li>
+      <li><b>Fecha puntual sin hora</b> → aviso 1 día antes (evento de todo el día).</li>
+      <li><b>Plazo / fecha límite</b> → avisos 1 y 2 días antes (y 1 hora antes si hay hora).</li>
+      <li><b>Cadencia recurrente</b> → evento repetido con la regla detectada (semanal, mensual…) y aviso 1 hora o 1 día antes de cada aparición.</li>
+    </ul>
+    <p style="color:#77756f">Siempre puedes corregir fecha, hora, repetición y aviso antes de guardar, desde la ventana emergente.</p>
+  </section>
+</div>
+<script type="module" src="options.js"></script>
+</body>
+</html>
