@@ -51,20 +51,39 @@
         chrome.runtime.sendMessage({type:'OPEN_POPUP_WITH_TEXT', ...payload});
       }catch(e){
         // si algo falla al capturar el contenedor/adjuntos, no perdemos el texto seleccionado
-        chrome.runtime.sendMessage({type:'OPEN_POPUP_WITH_TEXT', text: window.getSelection().toString(), images:[], childHint:null});
+        const fallbackInfo = getSelectionInfo();
+        chrome.runtime.sendMessage({type:'OPEN_POPUP_WITH_TEXT', text: fallbackInfo ? fallbackInfo.text : '', images:[], childHint:null});
       }
       removeBtn();
     });
     document.body.appendChild(btn);
   }
 
+  /** Muchos formularios de mensajería (De/Asunto/Sobre el hijo/cuerpo…)
+   *  muestran el texto dentro de <input>/<textarea>. Esas selecciones NO
+   *  las expone window.getSelection() — hay que mirar selectionStart/End
+   *  del propio campo con foco. Sin esto, seleccionar texto dentro de esos
+   *  campos no hacía aparecer el botón flotante en absoluto. */
+  function getSelectionInfo(){
+    const ae = document.activeElement;
+    if(ae && (ae.tagName==='TEXTAREA' || ae.tagName==='INPUT')){
+      try{
+        const s = ae.selectionStart, e = ae.selectionEnd;
+        if(s!=null && e!=null && e>s) return {text: ae.value.slice(s,e), node: ae, rectEl: ae};
+      }catch(err){ /* algunos tipos de input (number, email…) no soportan selectionStart */ }
+    }
+    const sel = window.getSelection();
+    const text = sel ? sel.toString().trim() : '';
+    if(text && sel.rangeCount) return {text, node: sel.getRangeAt(0).startContainer, rectEl: sel.getRangeAt(0)};
+    return null;
+  }
+
   document.addEventListener('mouseup', () => {
     setTimeout(() => {
-      const sel = window.getSelection();
-      const text = sel ? sel.toString().trim() : '';
-      if(text.length >= 12 && sel.rangeCount){
-        const rect = sel.getRangeAt(0).getBoundingClientRect();
-        if(rect.width || rect.height) showButtonNear(rect, sel.getRangeAt(0).startContainer);
+      const info = getSelectionInfo();
+      if(info && info.text.length >= 12){
+        const rect = info.rectEl.getBoundingClientRect();
+        if(rect.width || rect.height) showButtonNear(rect, info.node);
       } else {
         removeBtn();
       }
@@ -78,17 +97,49 @@
 
   /* ---------------- captura del mensaje completo (texto + adjuntos) ------- */
 
-  /** Sube desde el nodo de la selección hasta encontrar un contenedor con
-   *  contenido suficiente para representar "el mensaje completo" (heurística:
-   *  el primer ancestro con al menos 120 caracteres de texto). */
+  /** Sube desde el nodo de la selección hasta encontrar un contenedor que
+   *  represente "el mensaje completo". Dos heurísticas, por orden:
+   *  1) el primer ancestro que agrupe varios campos de formulario (típico de
+   *     un diálogo De/Asunto/Sobre el hijo/Fecha/cuerpo con inputs y textarea);
+   *  2) si no, el primer ancestro con al menos 120 caracteres de texto plano. */
   function findMessageContainer(node){
-    let el = node && node.nodeType===3 ? node.parentElement : node;
+    const start = node && node.nodeType===3 ? node.parentElement : node;
+    if(!start) return document.body;
+
+    let formEl = start;
+    while(formEl && formEl !== document.documentElement){
+      if(formEl.querySelectorAll && formEl.querySelectorAll('input,textarea,select').length >= 3) return formEl;
+      formEl = formEl.parentElement;
+    }
+
+    let el = start;
     while(el && el !== document.documentElement){
       const len = (el.innerText||'').trim().length;
       if(len >= 120) return el;
       el = el.parentElement;
     }
     return document.body;
+  }
+
+  /** Construye el texto del "correo" a partir de un contenedor que puede
+   *  mezclar texto plano y campos de formulario (inputs/textarea) — estos
+   *  últimos no aportan nada a innerText, así que hay que leer su .value
+   *  explícitamente o se pierde el De/Asunto/Sobre el hijo/cuerpo, etc. */
+  function buildTextFromContainer(container){
+    const parts = [];
+    const skipTypes = /^(hidden|button|submit|checkbox|radio|file|image|password)$/i;
+    for(const el of container.querySelectorAll('input,select')){
+      if(skipTypes.test(el.type||'')) continue;
+      if(!el.value || !el.value.trim()) continue;
+      const label = nearestLabelText(el).trim().replace(/:\s*$/,'');
+      parts.push(label ? `${label}: ${el.value.trim()}` : el.value.trim());
+    }
+    for(const el of container.querySelectorAll('textarea')){
+      if(el.value && el.value.trim()) parts.push(el.value.trim());
+    }
+    const plain = (container.innerText||'').trim();
+    if(plain) parts.push(plain);
+    return parts.join('\n\n');
   }
 
   function nearestLabelText(el){
@@ -161,10 +212,11 @@
 
   async function captureMessage(anchorNode){
     const container = findMessageContainer(anchorNode);
-    const text = (container.innerText || window.getSelection().toString() || '').trim();
+    const info = getSelectionInfo();
+    const text = buildTextFromContainer(container) || (info ? info.text : '');
     const childHint = findChildHint(container);
     const images = await collectAttachments(container);
-    return {text, images, childHint};
+    return {text: text.trim(), images, childHint};
   }
 
   /* ---------------- escaneo automático opcional (selectores CSS) ---------- */
