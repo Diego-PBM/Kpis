@@ -79,6 +79,14 @@ $('allDay').addEventListener('change', () => $('timeFld').classList.toggle('hidd
 $('sync').addEventListener('click', async () => {
   const text = $('text').value.trim();
   if(!text){ alert('Escribe o pega el texto del mensaje primero.'); return; }
+  if(!$('date').value){
+    const result = $('result');
+    result.classList.remove('hidden','ok','err');
+    result.classList.add('err');
+    result.textContent = '❌ Falta la fecha. Rellena el campo "Fecha" antes de guardar (no se ha detectado ninguna en el texto).';
+    $('date').focus();
+    return;
+  }
   const btn = $('sync'); btn.disabled = true; btn.textContent = 'Guardando…';
   const result = $('result');
   result.classList.remove('hidden','ok','err');

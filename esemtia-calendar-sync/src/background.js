@@ -136,6 +136,7 @@ async function syncMessageToCalendar({text, referenceDate, override}){
   const cfg = await getConfig();
   const calendarId = (override&&override.calendarId) || cfg.calendarId || 'primary';
   const parsed = Object.assign({}, parseMessage(text, {referenceDate}), override && override.parsed || {});
+  if(!parsed.date) throw new Error('Falta la fecha del evento: no se detectó ninguna en el texto y no se indicó una a mano.');
   const title = (override && override.title) || suggestTitle(text);
   const hash = await sha256Hex(text);
 
