@@ -135,7 +135,7 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background
   <header class="top">
     <div>
       <h1>Dashboard de KPIs</h1>
-      <p class="sub">Carga el archivo y filtra por <b>ciudad</b>, <b>turno</b> y <b>rango de fechas</b>.</p>
+      <p class="sub">Carga el archivo y filtra por <b>ciudad</b>, <b>agrupación</b>, <b>tipo de turno</b> y <b>rango de fechas</b>.</p>
     </div>
     <button id="theme">Modo oscuro</button>
   </header>
@@ -183,8 +183,19 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background
     <div class="card">
       <div class="filters">
         <label class="fld">Ciudad <select id="fCity"></select></label>
+        <div class="fld hidden" id="fGrupoWrap" style="position:relative">
+          <span>Agrupación</span>
+          <button type="button" id="fGrupoBtn" class="pickbtn" aria-expanded="false">Todas</button>
+          <div id="fGrupoPanel" class="pickpanel hidden">
+            <div class="pickrow">
+              <button type="button" id="fGrupoAll">Quitar filtro</button>
+              <span class="cnt" id="fGrupoCnt"></span>
+            </div>
+            <div id="fGrupoList" class="picklist"></div>
+          </div>
+        </div>
         <div class="fld" style="position:relative">
-          <span>Turno</span>
+          <span>Tipo de turno</span>
           <button type="button" id="fTurnoBtn" class="pickbtn" aria-expanded="false">Turnos</button>
           <div id="fTurnoPanel" class="pickpanel hidden">
             <input type="text" id="fTurnoSearch" placeholder="Filtrar… (p. ej. TARDE)" autocomplete="off">
@@ -254,14 +265,17 @@ const KPIS = [
 /* Peso para las medias ponderadas */
 const WEIGHT_ALIAS=['drivers','ndrivers','numdrivers','numerodedrivers','conductores','riders'];
 const KEY=(...p)=>p.join('\u0001');
+const SIN_TURNO='(sin turno)';      // filas con la columna de turno vacia: se muestran, no se tiran
+const SIN_GRUPO='(sin agrupación)';  // solo aparece si el archivo no trae la columna
 
 const S = {
   layout:'matrix', matrix:[], name:'', fromXlsx:false,
   hdrRow:-1, weekRow:-1, dateCols:[],                 // A) matriz
-  colCity:0, colTurno:1, colKpi:2, colDate:-1, colWeek:-1,
+  colCity:0, colTurno:1, colKpi:2, colDate:-1, colWeek:-1, colGrupo:-1,
   mode:'es', modeAuto:'es',
   periods:[], data:new Map(), kpiLabels:[], kpiMap:{}, kpiMeta:{}, weightMap:'',
   cities:[], turnosByCity:{}, allTurnos:[], rowCount:{}, skipped:0, dups:0, badDates:0,
+  grupos:[], gruposSel:[], gruposDeTurno:{}, gruposByCity:{}, sinTurno:0,
   city:null, turnos:[], from:null, to:null,
   view:Object.fromEntries(KPIS.map(k=>[k.id,'chart']))
 };
@@ -542,7 +556,8 @@ function setupMatrix(hdrRow,firstDateCol){
   S.dateCols.sort((a,b)=>a.iso<b.iso?-1:1);
   S.weekRow = (rows[hdrRow+1] && S.dateCols.some(d=>/^\d{4}-w\d{1,2}$/i.test(rows[hdrRow+1][d.c]||''))) ? hdrRow+1 : -1;
   if(S.weekRow>=0) S.dateCols.forEach(d=>{ d.week=rows[S.weekRow][d.c]||d.week; });
-  S.colCity=0; S.colTurno=1; S.colKpi=firstDateCol-1;
+  S.colCity=0; S.colKpi=firstDateCol-1;
+  asignarTurnoYGrupo(1, firstDateCol-2);
   const cc=guessCol(rows,hdrRow+1>=0?Math.max(hdrRow,0):0,['region','ciudad','city','plaza','provincia'],-1);
   detectNumberMode(hdrRow, S.dateCols.map(d=>d.c));
   finishSetup();
@@ -551,20 +566,28 @@ function setupLong(hdrRow,dateCol){
   S.layout='long'; S.hdrRow=hdrRow; S.colDate=dateCol;
   const rows=S.matrix;
   S.colCity =guessCol(rows,hdrRow,['region','ciudad','city','plaza','provincia','localidad'],0);
-  S.colTurno=guessCol(rows,hdrRow,['turno','shift','gturnos','franja'],-1);
-  if(S.colTurno<0||S.colTurno===S.colCity||S.colTurno===dateCol){
-    // sin cabecera reconocible: primera columna de texto que no sea ciudad ni fecha
-    S.colTurno=-1;
-    for(let c=0;c<maxCols(rows);c++){
-      if(c===S.colCity||c===dateCol) continue;
-      let txt=0,tot=0;
-      for(let r=hdrRow+1;r<Math.min(rows.length,hdrRow+60);r++){
-        const v=rows[r][c]; if(!v) continue; tot++;
-        if(!anyDate(v)&&!pval(v,S.mode)) txt++;
-      }
-      if(tot&&txt/tot>0.6){ S.colTurno=c; break; }
+  // Todas las columnas de texto que no son ciudad ni fecha son candidatas a
+  // turno o a agrupación; se reparten por variedad de valores.
+  const texto=[];
+  for(let c=0;c<maxCols(rows);c++){
+    if(c===S.colCity||c===dateCol) continue;
+    let txt=0,tot=0;
+    for(let r=hdrRow+1;r<Math.min(rows.length,hdrRow+60);r++){
+      const v=rows[r][c]; if(!v) continue; tot++;
+      if(!anyDate(v)&&!pval(v,S.mode)) txt++;
     }
+    if(tot&&txt/tot>0.6) texto.push(c);
+  }
+  if(texto.length){
+    const vals=c=>{ const s=new Set();
+      for(let r=hdrRow+1;r<rows.length;r++){ const v=(rows[r]||[])[c]; if(v) s.add(v); } return s.size; };
+    const orden=texto.slice().sort((a,b)=>vals(b)-vals(a));
+    S.colTurno=orden[0];
+    S.colGrupo=orden.length>1?orden[1]:-1;
+  } else {
+    S.colTurno=guessCol(rows,hdrRow,['turno','shift','gturnos','franja'],-1);
     if(S.colTurno<0) S.colTurno=(S.colCity===0?1:0)===dateCol?2:(S.colCity===0?1:0);
+    S.colGrupo=-1;
   }
   S.colWeek=-1;
   for(let c=0;c<maxCols(rows);c++){
@@ -572,10 +595,29 @@ function setupLong(hdrRow,dateCol){
     let w=0; for(let r=hdrRow+1;r<Math.min(rows.length,hdrRow+200);r++) if(/^\d{4}[-\s]?w\d{1,2}$/i.test(rows[r][c]||'')) w++;
     if(w>2){ S.colWeek=c; break; }
   }
-  const skip=new Set([S.colCity,S.colTurno,S.colDate,S.colWeek]);
+  const skip=new Set([S.colCity,S.colTurno,S.colDate,S.colWeek,S.colGrupo]);
   const cols=[]; for(let c=0;c<maxCols(rows);c++) if(!skip.has(c)) cols.push(c);
   detectNumberMode(hdrRow, cols);
   finishSetup();
+}
+/* Entre las columnas de etiqueta que quedan libres decide cuál es el TURNO y cuál
+   la AGRUPACIÓN. No se fía del orden en que Tableau las coloque: la agrupación
+   tiene pocos valores distintos (mañana, tarde, f_s…) y el turno muchos
+   (MAÑANA_05_40, TARDE_16_32…). Si solo queda una columna, no hay agrupación. */
+function asignarTurnoYGrupo(desde, hasta){
+  const rows=S.matrix, ini=Math.max(S.hdrRow,S.weekRow)+1;
+  const cand=[];
+  for(let c=desde;c<=hasta;c++){
+    if(c===S.colCity||c<0) continue;
+    const vals=new Set();
+    for(let r=ini;r<rows.length;r++){ const v=(rows[r]||[])[c]; if(v) vals.add(v); }
+    if(vals.size) cand.push({c, n:vals.size});
+  }
+  if(!cand.length){ S.colTurno=Math.max(desde,0); S.colGrupo=-1; return; }
+  if(cand.length===1){ S.colTurno=cand[0].c; S.colGrupo=-1; return; }
+  const orden=cand.slice().sort((a,b)=>b.n-a.n);   // más variedad primero
+  S.colTurno=orden[0].c;
+  S.colGrupo=orden[1].c;
 }
 function detectNumberMode(hdrRow,cols){
   const rows=S.matrix, sample=[];
@@ -631,11 +673,17 @@ function buildStructUI(){
     add('Fila con las fechas',rowOpts,S.hdrRow,v=>reHeaderMatrix(+v),`${S.dateCols.length} fechas detectadas`);
     add('Columna de CIUDAD',colOptions(false),S.colCity,v=>{S.colCity=+v;rebuild(true);});
     add('Columna de TURNO',colOptions(false),S.colTurno,v=>{S.colTurno=+v;rebuild(true);});
+    add('Columna de AGRUPACIÓN',[{v:-1,t:'(ninguna)'}].concat(colOptions(false)),S.colGrupo,
+        v=>{S.colGrupo=+v;S.gruposSel=[];rebuild(true);},
+        S.colGrupo<0?'el archivo no la trae':`${S.grupos.length} agrupaciones`);
     add('Columna de KPI',colOptions(false),S.colKpi,v=>{S.colKpi=+v;rebuild(true);});
   } else {
     add('Fila de cabecera',rowOpts,S.hdrRow,v=>{ setupLong(+v,S.colDate); });
     add('Columna de CIUDAD',colOptions(true),S.colCity,v=>{S.colCity=+v;rebuild(true);});
     add('Columna de TURNO',colOptions(true),S.colTurno,v=>{S.colTurno=+v;rebuild(true);});
+    add('Columna de AGRUPACIÓN',[{v:-1,t:'(ninguna)'}].concat(colOptions(true)),S.colGrupo,
+        v=>{S.colGrupo=+v;S.gruposSel=[];rebuild(true);},
+        S.colGrupo<0?'el archivo no la trae':`${S.grupos.length} agrupaciones`);
     add('Columna de FECHA',colOptions(true),S.colDate,v=>{ setupLong(S.hdrRow,+v); });
   }
   add('Formato numérico',[{v:'es',t:'Español — 1.234,56'},{v:'en',t:'Inglés — 1,234.56'}],S.mode,
@@ -650,8 +698,9 @@ function reHeaderMatrix(r){
 
 /* ---------- Construcción del modelo ------------------------------------ */
 function rebuild(remapKpis){
-  S.data=new Map(); S.skipped=0; S.dups=0; S.badDates=0;
-  const ctx={kpiSet:new Map(),cities:new Set(),tByC:{},decs:{},sufs:{},rowCount:{},isos:new Set(),weekBy:{}};
+  S.data=new Map(); S.sinTurno=0; S.dups=0; S.badDates=0;
+  const ctx={kpiSet:new Map(),cities:new Set(),tByC:{},decs:{},sufs:{},rowCount:{},isos:new Set(),weekBy:{},
+             grupos:new Set(),gByT:{},gByC:{}};
   if(S.layout==='matrix') buildMatrix(ctx); else buildLong(ctx);
 
   S.kpiLabels=[...ctx.kpiSet.keys()].sort((a,b)=>a.localeCompare(b,'es'));
@@ -660,12 +709,18 @@ function rebuild(remapKpis){
   const all=new Set(); for(const c in ctx.tByC) for(const t of ctx.tByC[c]) all.add(t);
   S.allTurnos=[...all].sort(turnoSort);
   S.rowCount=ctx.rowCount; S._decs=ctx.decs; S._sufs=ctx.sufs;
+  S.grupos=[...ctx.grupos].sort((a,b)=>a.localeCompare(b,'es'));
+  S.gruposDeTurno={};
+  for(const k in ctx.gByT) S.gruposDeTurno[k]=[...ctx.gByT[k]].sort((a,b)=>a.localeCompare(b,'es'));
+  S.gruposByCity={};
+  for(const c in ctx.gByC) S.gruposByCity[c]=[...ctx.gByC[c]].sort((a,b)=>a.localeCompare(b,'es'));
+  S.gruposSel=S.gruposSel.filter(g=>S.grupos.includes(g));
   S.periods=[...ctx.isos].sort().map(iso=>({iso,label:dLabel(iso),week:ctx.weekBy[iso]||''}));
 
   if(remapKpis || !Object.keys(S.kpiMap).length) autoMapKpis();
   applyKpiMeta(); buildKpiUI();
   if(!S.cities.includes(S.city)) S.city=S.cities[0]||null;
-  const ts=S.city?(S.turnosByCity[S.city]||[]):[];
+  const ts=availTurnos();
   S.turnos=S.turnos.filter(t=>ts.includes(t));
   if(!S.turnos.length && ts.length) S.turnos=[ts[0]];
   const isos=S.periods.map(p=>p.iso);
@@ -675,15 +730,16 @@ function rebuild(remapKpis){
     + ` · ${S.allTurnos.length} turno${S.allTurnos.length===1?'':'s'}`
     + ` · ${S.periods.length} fecha${S.periods.length===1?'':'s'}`
     + ` · ${S.kpiLabels.length} KPIs en el archivo`
-    + (S.skipped?` · ${S.skipped} filas ignoradas (turno vacío)`:'')
+    + (S.colGrupo>=0?` · ${S.grupos.length} agrupaciones`:'')
+    + (S.sinTurno?` · ${S.sinTurno} filas sin turno → «${SIN_TURNO}»`:'')
     + (S.badDates?` · ${S.badDates} filas sin fecha válida`:'')
     + (S.dups?` · ¡${S.dups} duplicados!`:'')
     + ` — clic para cambiar el archivo o ajustar columnas`;
   buildTurnoAudit(); buildFilterUI(); render();
 }
-function note(ctx,city,turno,kpi,iso,raw){
+function note(ctx,city,turno,grupo,kpi,iso,raw){
   const p=pval(raw,S.mode); if(!p) return;
-  const k=KEY(city,turno,kpi);
+  const k=KEY(city,turno,grupo,kpi);
   let m=S.data.get(k); if(!m){ m={}; S.data.set(k,m); }
   if(m[iso]!==undefined) S.dups++;
   m[iso]=p.v;
@@ -691,45 +747,54 @@ function note(ctx,city,turno,kpi,iso,raw){
   ctx.decs[kpi]=Math.max(ctx.decs[kpi]||0,Math.min(p.dec,2));
   if(p.pct) ctx.sufs[kpi]=' %'; else if(p.eur&&ctx.sufs[kpi]!==' %') ctx.sufs[kpi]=' €';
 }
-function tally(ctx,city,turno,kpi){
+function tally(ctx,city,turno,grupo,kpi){
   ctx.kpiSet.set(kpi,(ctx.kpiSet.get(kpi)||0)+1);
   ctx.cities.add(city);
   (ctx.tByC[city]=ctx.tByC[city]||new Set()).add(turno);
   const rk=KEY(city,turno); ctx.rowCount[rk]=(ctx.rowCount[rk]||0)+1;
+  ctx.grupos.add(grupo);
+  (ctx.gByC[city]=ctx.gByC[city]||new Set()).add(grupo);
+  (ctx.gByT[KEY(city,turno)]=ctx.gByT[KEY(city,turno)]||new Set()).add(grupo);
 }
 function buildMatrix(ctx){
   const rows=S.matrix, start=Math.max(S.hdrRow,S.weekRow)+1;
   for(const d of S.dateCols) if(d.week) ctx.weekBy[d.iso]=d.week;
   for(let r=start;r<rows.length;r++){
     const row=rows[r]; if(!row) continue;
-    const city=row[S.colCity]||'', turno=row[S.colTurno]||'', kpi=row[S.colKpi]||'';
+    const city=row[S.colCity]||'', kpi=row[S.colKpi]||'';
+    let turno=row[S.colTurno]||'';
+    const grupo=(S.colGrupo>=0?(row[S.colGrupo]||''):'')||SIN_GRUPO;
     if(!city||!kpi) continue;
-    if(!turno){ S.skipped++; continue; }
-    tally(ctx,city,turno,kpi);
-    for(const d of S.dateCols) note(ctx,city,turno,kpi,d.iso,row[d.c]);
+    if(!turno){ turno=SIN_TURNO; S.sinTurno++; }
+    tally(ctx,city,turno,grupo,kpi);
+    for(const d of S.dateCols) note(ctx,city,turno,grupo,kpi,d.iso,row[d.c]);
   }
 }
 function buildLong(ctx){
   const rows=S.matrix, hdr=rows[S.hdrRow], start=S.hdrRow+1;
-  const skip=new Set([S.colCity,S.colTurno,S.colDate,S.colWeek]);
+  const skip=new Set([S.colCity,S.colTurno,S.colDate,S.colWeek,S.colGrupo]);
   const kpiCols=[];
   for(let c=0;c<maxCols(rows);c++) if(!skip.has(c)&&hdr[c]) kpiCols.push({c,label:hdr[c]});
   for(let r=start;r<rows.length;r++){
     const row=rows[r]; if(!row) continue;
-    const city=row[S.colCity]||'', turno=row[S.colTurno]||'';
+    const city=row[S.colCity]||'';
+    let turno=row[S.colTurno]||'';
+    const grupo=(S.colGrupo>=0?(row[S.colGrupo]||''):'')||SIN_GRUPO;
     if(!city) continue;
-    if(!turno){ S.skipped++; continue; }
+    if(!turno){ turno=SIN_TURNO; S.sinTurno++; }
     const d=anyDate(row[S.colDate]);
     if(!d){ S.badDates++; continue; }
     if(S.colWeek>=0 && row[S.colWeek]) ctx.weekBy[d.iso]=row[S.colWeek];
     else if(d.label) ctx.weekBy[d.iso]=d.label;
     for(const k of kpiCols){
-      tally(ctx,city,turno,k.label);
-      note(ctx,city,turno,k.label,d.iso,row[k.c]);
+      tally(ctx,city,turno,grupo,k.label);
+      note(ctx,city,turno,grupo,k.label,d.iso,row[k.c]);
     }
   }
 }
 function turnoSort(a,b){
+  if(a===SIN_TURNO) return 1;            // «(sin turno)» siempre al final de la lista
+  if(b===SIN_TURNO) return -1;
   const na=(String(a).match(/\d+/)||[])[0], nb=(String(b).match(/\d+/)||[])[0];
   if(na!==undefined&&nb!==undefined&&+na!==+nb) return +na-+nb;
   return String(a).localeCompare(String(b),'es');
@@ -797,7 +862,7 @@ function buildTurnoAudit(){
   for(const c of S.cities) for(const t of (S.turnosByCity[c]||[]))
     h+=`<tr><td>${c}</td><td>${t}</td><td>${S.rowCount[KEY(c,t)]||0}</td></tr>`;
   document.getElementById('turnoAudit').innerHTML=h+'</tbody></table></div>'+
-    `<div class="hint" style="margin-top:8px">Si falta un turno que sí está en tu archivo: o sus filas tienen la columna de turno vacía (${S.skipped} ignoradas) o la ciudad está escrita de otra forma.</div>`;
+    `<div class="hint" style="margin-top:8px">Si falta un turno que sí está en tu archivo: o sus filas tienen la columna de turno vacía (${S.sinTurno} reetiquetadas como «${SIN_TURNO}») o la ciudad está escrita de otra forma.</div>`;
 }
 
 /* ---------- Filtros ----------------------------------------------------- */
@@ -805,15 +870,69 @@ function buildFilterUI(){
   const c=document.getElementById('fCity');
   c.innerHTML=S.cities.map(x=>`<option value="${x.replace(/"/g,'&quot;')}">${x}</option>`).join('');
   c.value=S.city||'';
+  buildGrupoUI();
   buildTurnoUI();
   const opts=S.periods.map(p=>`<option value="${p.iso}">${dFull(p.iso)}${p.week?' · '+p.week:''}</option>`).join('');
   const a=document.getElementById('fFrom'), b=document.getElementById('fTo');
   a.innerHTML=opts; b.innerHTML=opts; a.value=S.from; b.value=S.to;
 }
 /* ---- Selector múltiple de turnos (casillas + buscador) ---- */
-function availTurnos(){ return S.city?(S.turnosByCity[S.city]||[]):[]; }
+/* Turnos disponibles: los de la ciudad, acotados por la agrupación elegida.
+   Sin ninguna agrupación marcada NO se filtra nada: equivale a «todas». */
+/* Agrupaciones de un turno EN LA CIUDAD ACTIVA. */
+function gruposDeTurno(t,city){ return S.gruposDeTurno[KEY(city||S.city,t)]||[]; }
+function gruposDe(t){ return gruposDeTurno(t).join(', '); }
+/* Turnos que tienen al menos una agrupación de las marcadas. */
+function availTurnos(){
+  const base = S.city?(S.turnosByCity[S.city]||[]):[];
+  if(S.colGrupo<0 || !S.gruposSel.length) return base;
+  return base.filter(t=>gruposDeTurno(t).some(g=>S.gruposSel.includes(g)));
+}
+/* Pares (turno, agrupación) que de verdad se están sumando. Es la unidad real
+   del dato: un mismo turno puede tener varias agrupaciones con cifras propias. */
+function paresActivos(){
+  const out=[];
+  for(const t of S.turnos)
+    for(const g of gruposDeTurno(t))
+      if(S.colGrupo<0 || !S.gruposSel.length || S.gruposSel.includes(g)) out.push([t,g]);
+  return out;
+}
+function buildGrupoUI(){
+  const wrap=document.getElementById('fGrupoWrap');
+  if(S.colGrupo<0 || !S.grupos.length){ wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+  const list=document.getElementById('fGrupoList');
+  const conDatos=new Set(S.gruposByCity[S.city]||[]);
+  list.innerHTML = S.grupos.map(g=>{
+    const ok=conDatos.has(g), on=S.gruposSel.includes(g);
+    return `<label class="${ok?'':'off'}"><input type="checkbox" value="${g.replace(/"/g,'&quot;')}"
+      ${on?'checked':''} ${ok?'':'disabled'}>${g}${ok?'':' — sin datos en '+S.city}</label>`;
+  }).join('');
+  list.querySelectorAll('input').forEach(c=>c.addEventListener('change',()=>{
+    if(c.checked){ if(!S.gruposSel.includes(c.value)) S.gruposSel.push(c.value); }
+    else S.gruposSel=S.gruposSel.filter(g=>g!==c.value);
+    // Al acotar por agrupación se marcan TODOS sus turnos: quien filtra por
+    // «tarde» quiere ver la tarde entera, no un turno suelto. Después puede
+    // desmarcar los que no quiera en «Tipo de turno».
+    if(S.gruposSel.length) S.turnos=availTurnos().slice();
+    buildTurnoUI(); updateGrupoBtn(); render();
+  }));
+  document.getElementById('fGrupoCnt').textContent =
+    S.gruposSel.length ? `${S.gruposSel.length} de ${S.grupos.length}` : `todas (${S.grupos.length})`;
+  updateGrupoBtn();
+}
+function updateGrupoBtn(){
+  const b=document.getElementById('fGrupoBtn');
+  b.textContent = !S.gruposSel.length ? 'Todas'
+    : S.gruposSel.length===1 ? S.gruposSel[0]
+    : `${S.gruposSel.length} agrupaciones`;
+  b.title = S.gruposSel.length ? S.gruposSel.join(' · ') : 'Sin filtrar por agrupación';
+}
 function buildTurnoUI(){
-  const avail=availTurnos(), all=S.allTurnos||avail;
+  const avail=availTurnos();
+  let all=S.allTurnos||avail;
+  if(S.colGrupo>=0 && S.gruposSel.length)          // la agrupación acota también la lista
+    all=all.filter(t=>S.cities.some(c=>gruposDeTurno(t,c).some(g=>S.gruposSel.includes(g))));
   S.turnos=S.turnos.filter(t=>avail.includes(t));
   if(!S.turnos.length && avail.length) S.turnos=[avail[0]];
   const q=norm(document.getElementById('fTurnoSearch').value||'');
@@ -821,9 +940,11 @@ function buildTurnoUI(){
   list.innerHTML = all.length ? all.map(x=>{
       if(q && !norm(x).includes(q)) return '';
       const ok=avail.includes(x), on=S.turnos.includes(x);
+      const g=S.colGrupo>=0?gruposDe(x):'';
       return `<label class="${ok?'':'off'}"><input type="checkbox" value="${x.replace(/"/g,'&quot;')}"
-        ${on?'checked':''} ${ok?'':'disabled'}>${x}${ok?'':' — sin datos en '+S.city}</label>`;
-    }).join('') : '<div class="hint">(sin turnos)</div>';
+        ${on?'checked':''} ${ok?'':'disabled'}>${x}${g?' <span class="hint">· '+g+'</span>':''}${ok?'':' — sin datos en '+S.city}</label>`;
+    }).join('')
+    : `<div class="hint">${S.gruposSel.length?'Ningún turno en la agrupación elegida.':'(sin turnos)'}</div>`;
   list.querySelectorAll('input').forEach(c=>c.addEventListener('change',()=>{
     if(c.checked){ if(!S.turnos.includes(c.value)) S.turnos.push(c.value); }
     else S.turnos=S.turnos.filter(t=>t!==c.value);
@@ -854,9 +975,9 @@ function seriesOf(kid){
   const lab=S.kpiMap[kid], k=KPIS.find(x=>x.id===kid);
   if(!lab||!S.city||!S.turnos.length) return [];
   const wl=S.weightMap;
-  const src=S.turnos.map(t=>({
-    m:S.data.get(KEY(S.city,t,lab))||{},
-    w:wl?(S.data.get(KEY(S.city,t,wl))||{}):null
+  const src=paresActivos().map(([t,g])=>({
+    m:S.data.get(KEY(S.city,t,g,lab))||{},
+    w:wl?(S.data.get(KEY(S.city,t,g,wl))||{}):null
   }));
   return activeDates().map(p=>{
     let acc=0, wsum=0, plain=0, n=0, pond=(k.agg==='wmean'&&!!wl);
@@ -881,16 +1002,23 @@ function seriesOf(kid){
 function turnoTxt(){
   return S.turnos.length===1 ? S.turnos[0] : `${S.turnos.length} turnos (${S.turnos.join(', ')})`;
 }
+function paresTxt(){
+  const n=paresActivos().length, t=S.turnos.length;
+  return n===t ? '' : ` · ${n} combinaciones turno×agrupación`;
+}
 function render(){
   const n=activeDates().length, nt=availTurnos().length;
+  const gTxt = S.colGrupo<0 ? '' :
+    (S.gruposSel.length ? ` · agrupación: ${S.gruposSel.join(', ')}` : ' · todas las agrupaciones');
   document.getElementById('filterInfo').textContent = S.city
-    ? `${S.city} · ${turnoTxt()} · ${dFull(S.from)} → ${dFull(S.to)} · ${n} fecha${n===1?'':'s'} en el eje X`
-      + ` · ${S.city} tiene ${nt} turno${nt===1?'':'s'} en el archivo`
+    ? `${S.city}${gTxt} · ${turnoTxt()} · ${dFull(S.from)} → ${dFull(S.to)} · ${n} fecha${n===1?'':'s'} en el eje X`
+      + paresTxt()
+      + ` · ${nt} turno${nt===1?'':'s'} disponible${nt===1?'':'s'} con estos filtros`
     : 'Sin datos.';
   // cómo se están combinando los turnos: visible siempre que haya más de uno
   const mn=document.getElementById('methodNote');
-  if(S.turnos.length>1){
-    mn.innerHTML=`<div class="method">Combinando <b>${S.turnos.length} turnos</b>:
+  if(paresActivos().length>1){
+    mn.innerHTML=`<div class="method">Combinando <b>${paresActivos().length} ${S.colGrupo>=0?'combinaciones turno×agrupación':'turnos'}</b>:
       <b>WH / CAE</b>, <b>DO / WH</b> y <b>Eur / Hour</b> como <b>media ponderada por
       ${S.weightMap?'«'+S.weightMap+'»':'—'}</b>; <b>Request</b> y <b>Total Wh</b> como <b>suma</b>.
       ${S.weightMap?'':'<br>No hay fila de peso asignada, así que los ratios salen como media simple: asígnala en el bloque de arriba («Peso para las medias»).'}</div>`;
@@ -1080,7 +1208,7 @@ function exportSelfContained(){
   const doc=document.documentElement.cloneNode(true);
   const q=s=>doc.querySelector(s);
   ['#tiles','#cards','#structGrid','#kpiGrid','#diagBody','#turnoAudit','#mapWarn','#errBox',
-   '#fCity','#fTurno','#fFrom','#fTo','#filterInfo','#layoutNote'].forEach(s=>{ const n=q(s); if(n) n.innerHTML=''; });
+   '#fCity','#fTurnoList','#fGrupoList','#fFrom','#fTo','#filterInfo','#layoutNote'].forEach(s=>{ const n=q(s); if(n) n.innerHTML=''; });
   q('#setupSum').textContent='Cargando los datos incrustados…';
   q('#errBox').className='card hidden';
   q('#drop').className='';
@@ -1093,6 +1221,7 @@ function exportSelfContained(){
     rows:S.matrix, name:S.name.replace(/ · copia.*$/,''), stamp,
     layout:S.layout, hdrRow:S.hdrRow, weekRow:S.weekRow, dateCols:S.dateCols,
     colCity:S.colCity, colTurno:S.colTurno, colKpi:S.colKpi, colDate:S.colDate, colWeek:S.colWeek,
+    colGrupo:S.colGrupo, gruposSel:S.gruposSel,
     mode:S.mode, kpiMap:S.kpiMap, weightMap:S.weightMap,
     city:S.city, turnos:S.turnos, from:S.from, to:S.to
   };
@@ -1114,6 +1243,8 @@ function bootBaked(d){
   S.name=d.name+' · copia con datos del '+d.stamp;
   S.layout=d.layout; S.hdrRow=d.hdrRow; S.weekRow=d.weekRow; S.dateCols=d.dateCols||[];
   S.colCity=d.colCity; S.colTurno=d.colTurno; S.colKpi=d.colKpi;
+  S.colGrupo=(d.colGrupo===undefined?-1:d.colGrupo);
+  S.gruposSel=(d.gruposSel||[]).slice();
   S.colDate=d.colDate; S.colWeek=d.colWeek;
   S.mode=d.mode; S.modeAuto=d.mode; S.kpiMap=d.kpiMap||{}; S.weightMap=d.weightMap||'';
   if(d.turnos) S.turnos=d.turnos.slice();
@@ -1122,7 +1253,7 @@ function bootBaked(d){
   const av=availTurnos();
   const keep=(d.turnos||[]).filter(t=>av.includes(t));
   if(keep.length) S.turnos=keep;
-  buildTurnoUI();
+  buildGrupoUI(); buildTurnoUI();
   const isos=S.periods.map(p=>p.iso);
   if(isos.includes(d.from)&&isos.includes(d.to)){ S.from=d.from; S.to=d.to; }
   buildFilterUI(); render();
@@ -1149,7 +1280,19 @@ el('reset').addEventListener('click',()=>{
   el('setupSum').textContent='Cargar archivo y comprobar columnas';
   el('setup').open=true; el('file').value=''; clearError();
 });
-el('fCity').addEventListener('change',e=>{ S.city=e.target.value; buildTurnoUI(); render(); });
+el('fCity').addEventListener('change',e=>{ S.city=e.target.value; buildGrupoUI(); buildTurnoUI(); render(); });
+/* --- panel de agrupación --- */
+function grupoPanelOpen(v){
+  el('fGrupoPanel').classList.toggle('hidden',!v);
+  el('fGrupoBtn').setAttribute('aria-expanded',v?'true':'false');
+  if(v) buildGrupoUI();
+}
+el('fGrupoBtn').addEventListener('click',e=>{
+  e.stopPropagation();
+  grupoPanelOpen(el('fGrupoPanel').classList.contains('hidden'));
+});
+el('fGrupoAll').addEventListener('click',()=>{ S.gruposSel=[]; buildGrupoUI(); buildTurnoUI(); render(); });
+el('fGrupoPanel').addEventListener('click',e=>e.stopPropagation());
 /* --- panel de turnos --- */
 function turnoPanelOpen(v){
   el('fTurnoPanel').classList.toggle('hidden',!v);
@@ -1167,8 +1310,11 @@ el('fTurnoNone').addEventListener('click',()=>{
   buildTurnoUI(); render();
 });
 el('fTurnoPanel').addEventListener('click',e=>e.stopPropagation());
-document.addEventListener('click',()=>{ if(!el('fTurnoPanel').classList.contains('hidden')) turnoPanelOpen(false); });
-document.addEventListener('keydown',e=>{ if(e.key==='Escape') turnoPanelOpen(false); });
+document.addEventListener('click',()=>{
+  if(!el('fTurnoPanel').classList.contains('hidden')) turnoPanelOpen(false);
+  if(!el('fGrupoPanel').classList.contains('hidden')) grupoPanelOpen(false);
+});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ turnoPanelOpen(false); grupoPanelOpen(false); } });
 el('fFrom').addEventListener('change',e=>{ S.from=e.target.value; if(S.from>S.to){S.to=S.from;el('fTo').value=S.to;} render(); });
 el('fTo').addEventListener('change',e=>{ S.to=e.target.value; if(S.to<S.from){S.from=S.to;el('fFrom').value=S.from;} render(); });
 document.querySelectorAll('.presets button').forEach(b=>b.addEventListener('click',()=>{
