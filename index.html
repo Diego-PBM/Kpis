@@ -66,6 +66,16 @@ select{font:inherit;color:var(--text-primary);background:var(--surface-1);
 .picklist label.off{color:var(--text-muted);cursor:not-allowed}
 .picklist label.off:hover{background:none}
 .picklist input{margin:0;flex:none}
+.swrow{display:flex;align-items:flex-start;gap:10px;cursor:pointer;line-height:1.5}
+.swrow input{margin-top:3px;flex:none}
+.swrow .hint{display:block}
+.lgnd{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 8px;font-size:12px;color:var(--text-secondary)}
+.lgnd i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.difhead{font-size:12px;font-weight:600;color:var(--text-secondary);margin:14px 0 4px;
+  padding-top:12px;border-top:1px dashed var(--grid)}
+.cmpcols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:6px}
+.cmpcols div{font-size:12px}
+.cmpcols .n{font-size:17px;font-weight:600;color:var(--text-primary);font-variant-numeric:tabular-nums}
 .method{border-left:3px solid var(--s1);background:var(--wash);padding:9px 12px;border-radius:6px;
   font-size:12px;color:var(--text-secondary);margin-top:12px}
 #setup{margin-bottom:22px}
@@ -221,6 +231,53 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background
     </div>
   </section>
 
+  <!-- COMPARADOR — segundo juego de filtros -->
+  <section id="cmpSec" class="hidden">
+    <h2>Comparador</h2>
+    <div class="card">
+      <label class="swrow"><input type="checkbox" id="cmpOn">
+        <b>Comparar contra otra selección</b>
+        <span class="hint">Los filtros de arriba son el lado <b>A</b>; estos, el lado <b>B</b>.
+          Las gráficas mostrarán las dos series y la diferencia A − B.</span></label>
+      <div id="cmpBox" class="hidden" style="margin-top:14px">
+        <div class="filters">
+          <label class="fld">Ciudad <select id="cCity"></select></label>
+          <div class="fld hidden" id="cGrupoWrap" style="position:relative">
+            <span>Agrupación</span>
+            <button type="button" id="cGrupoBtn" class="pickbtn" aria-expanded="false">Todas</button>
+            <div id="cGrupoPanel" class="pickpanel hidden">
+              <div class="pickrow">
+                <button type="button" id="cGrupoAll">Quitar filtro</button>
+                <span class="cnt" id="cGrupoCnt"></span>
+              </div>
+              <div id="cGrupoList" class="picklist"></div>
+            </div>
+          </div>
+          <div class="fld" style="position:relative">
+            <span>Tipo de turno</span>
+            <button type="button" id="cTurnoBtn" class="pickbtn" aria-expanded="false">Turnos</button>
+            <div id="cTurnoPanel" class="pickpanel hidden">
+              <input type="text" id="cTurnoSearch" placeholder="Filtrar… (p. ej. TARDE)" autocomplete="off">
+              <div class="pickrow">
+                <button type="button" id="cTurnoAll">Todos</button>
+                <button type="button" id="cTurnoNone">Ninguno</button>
+                <span class="cnt" id="cTurnoCnt"></span>
+              </div>
+              <div id="cTurnoList" class="picklist"></div>
+            </div>
+          </div>
+          <label class="fld">Fecha desde <select id="cFrom"></select></label>
+          <label class="fld">Fecha hasta <select id="cTo"></select></label>
+          <div class="fld" style="justify-content:flex-end;padding-bottom:1px">
+            <button type="button" id="cIgual">Mismas fechas que A</button>
+          </div>
+        </div>
+        <div class="hint" id="cmpInfo" style="margin-top:12px"></div>
+        <div id="cmpWarn"></div>
+      </div>
+    </div>
+  </section>
+
   <section id="tilesSec" class="hidden">
     <h2>Última fecha del rango</h2>
     <div class="tiles" id="tiles"></div>
@@ -277,6 +334,7 @@ const S = {
   cities:[], turnosByCity:{}, allTurnos:[], rowCount:{}, skipped:0, dups:0, badDates:0,
   grupos:[], gruposSel:[], gruposDeTurno:{}, gruposByCity:{}, sinTurno:0,
   city:null, turnos:[], from:null, to:null,
+  cmp:{on:false, city:null, turnos:[], gruposSel:[], from:null, to:null},
   view:Object.fromEntries(KPIS.map(k=>[k.id,'chart']))
 };
 
@@ -632,7 +690,7 @@ function finishSetup(remap){
   rebuild(remap===undefined?true:remap);
   document.getElementById('drop').classList.add('hidden');
   document.getElementById('structWrap').classList.remove('hidden');
-  ['filterSec','tilesSec','cardsSec'].forEach(id=>document.getElementById(id).classList.remove('hidden'));
+  ['filterSec','cmpSec','tilesSec','cardsSec'].forEach(id=>document.getElementById(id).classList.remove('hidden'));
   document.getElementById('setup').open=false;
 }
 
@@ -875,6 +933,7 @@ function buildFilterUI(){
   const opts=S.periods.map(p=>`<option value="${p.iso}">${dFull(p.iso)}${p.week?' · '+p.week:''}</option>`).join('');
   const a=document.getElementById('fFrom'), b=document.getElementById('fTo');
   a.innerHTML=opts; b.innerHTML=opts; a.value=S.from; b.value=S.to;
+  buildCmpUI();
 }
 /* ---- Selector múltiple de turnos (casillas + buscador) ---- */
 /* Turnos disponibles: los de la ciudad, acotados por la agrupación elegida.
@@ -883,18 +942,20 @@ function buildFilterUI(){
 function gruposDeTurno(t,city){ return S.gruposDeTurno[KEY(city||S.city,t)]||[]; }
 function gruposDe(t){ return gruposDeTurno(t).join(', '); }
 /* Turnos que tienen al menos una agrupación de las marcadas. */
-function availTurnos(){
-  const base = S.city?(S.turnosByCity[S.city]||[]):[];
-  if(S.colGrupo<0 || !S.gruposSel.length) return base;
-  return base.filter(t=>gruposDeTurno(t).some(g=>S.gruposSel.includes(g)));
+function availTurnos(L){
+  L=L||LADO_A();
+  const base = L.city?(S.turnosByCity[L.city]||[]):[];
+  if(S.colGrupo<0 || !L.grupos.length) return base;
+  return base.filter(t=>gruposDeTurno(t,L.city).some(g=>L.grupos.includes(g)));
 }
 /* Pares (turno, agrupación) que de verdad se están sumando. Es la unidad real
    del dato: un mismo turno puede tener varias agrupaciones con cifras propias. */
-function paresActivos(){
+function paresActivos(L){
+  L=L||LADO_A();
   const out=[];
-  for(const t of S.turnos)
-    for(const g of gruposDeTurno(t))
-      if(S.colGrupo<0 || !S.gruposSel.length || S.gruposSel.includes(g)) out.push([t,g]);
+  for(const t of L.turnos)
+    for(const g of gruposDeTurno(t,L.city))
+      if(S.colGrupo<0 || !L.grupos.length || L.grupos.includes(g)) out.push([t,g]);
   return out;
 }
 function buildGrupoUI(){
@@ -920,6 +981,89 @@ function buildGrupoUI(){
   document.getElementById('fGrupoCnt').textContent =
     S.gruposSel.length ? `${S.gruposSel.length} de ${S.grupos.length}` : `todas (${S.grupos.length})`;
   updateGrupoBtn();
+}
+/* ---------- Comparador: filtros del lado B ---------------------------- */
+function cmpDefaults(){
+  if(!S.cmp.city || !S.cities.includes(S.cmp.city)) S.cmp.city=S.city||S.cities[0]||null;
+  S.cmp.grupos=undefined;                                   // por si quedó de una versión vieja
+  S.cmp.gruposSel=(S.cmp.gruposSel||[]).filter(g=>S.grupos.includes(g));
+  const av=availTurnos(LADO_B());
+  S.cmp.turnos=(S.cmp.turnos||[]).filter(t=>av.includes(t));
+  if(!S.cmp.turnos.length && av.length){
+    // arranca en un turno distinto al de A si se puede: comparar algo consigo mismo no dice nada
+    const otro=av.find(t=>!S.turnos.includes(t));
+    S.cmp.turnos=[otro||av[0]];
+  }
+  const isos=S.periods.map(p=>p.iso);
+  if(!isos.includes(S.cmp.from)||!isos.includes(S.cmp.to)||S.cmp.from>S.cmp.to){
+    S.cmp.from=S.from; S.cmp.to=S.to;
+  }
+}
+function buildCmpUI(){
+  if(!S.cities.length) return;
+  cmpDefaults();
+  const c=document.getElementById('cCity');
+  c.innerHTML=S.cities.map(x=>`<option value="${x.replace(/"/g,'&quot;')}">${x}</option>`).join('');
+  c.value=S.cmp.city||'';
+  const opts=S.periods.map(p=>`<option value="${p.iso}">${dFull(p.iso)}${p.week?' · '+p.week:''}</option>`).join('');
+  const a=document.getElementById('cFrom'), b=document.getElementById('cTo');
+  a.innerHTML=opts; b.innerHTML=opts; a.value=S.cmp.from; b.value=S.cmp.to;
+  buildCmpGrupoUI(); buildCmpTurnoUI();
+}
+function buildCmpGrupoUI(){
+  const wrap=document.getElementById('cGrupoWrap');
+  if(S.colGrupo<0 || !S.grupos.length){ wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+  const conDatos=new Set(S.gruposByCity[S.cmp.city]||[]);
+  document.getElementById('cGrupoList').innerHTML = S.grupos.map(g=>{
+    const ok=conDatos.has(g), on=S.cmp.gruposSel.includes(g);
+    return `<label class="${ok?'':'off'}"><input type="checkbox" value="${g.replace(/"/g,'&quot;')}"
+      ${on?'checked':''} ${ok?'':'disabled'}>${g}${ok?'':' — sin datos en '+S.cmp.city}</label>`;
+  }).join('');
+  document.querySelectorAll('#cGrupoList input').forEach(x=>x.addEventListener('change',()=>{
+    if(x.checked){ if(!S.cmp.gruposSel.includes(x.value)) S.cmp.gruposSel.push(x.value); }
+    else S.cmp.gruposSel=S.cmp.gruposSel.filter(g=>g!==x.value);
+    if(S.cmp.gruposSel.length) S.cmp.turnos=availTurnos(LADO_B()).slice();
+    buildCmpTurnoUI(); updateCmpGrupoBtn(); render();
+  }));
+  document.getElementById('cGrupoCnt').textContent =
+    S.cmp.gruposSel.length ? `${S.cmp.gruposSel.length} de ${S.grupos.length}` : `todas (${S.grupos.length})`;
+  updateCmpGrupoBtn();
+}
+function updateCmpGrupoBtn(){
+  const b=document.getElementById('cGrupoBtn');
+  b.textContent = !S.cmp.gruposSel.length ? 'Todas'
+    : S.cmp.gruposSel.length===1 ? S.cmp.gruposSel[0] : `${S.cmp.gruposSel.length} agrupaciones`;
+}
+function buildCmpTurnoUI(){
+  const av=availTurnos(LADO_B());
+  let all=S.allTurnos||av;
+  if(S.colGrupo>=0 && S.cmp.gruposSel.length)
+    all=all.filter(t=>S.cities.some(c=>gruposDeTurno(t,c).some(g=>S.cmp.gruposSel.includes(g))));
+  S.cmp.turnos=S.cmp.turnos.filter(t=>av.includes(t));
+  if(!S.cmp.turnos.length && av.length) S.cmp.turnos=[av[0]];
+  const q=norm(document.getElementById('cTurnoSearch').value||'');
+  document.getElementById('cTurnoList').innerHTML = all.length ? all.map(x=>{
+      if(q && !norm(x).includes(q)) return '';
+      const ok=av.includes(x), on=S.cmp.turnos.includes(x);
+      const g=S.colGrupo>=0?gruposDeTurno(x,S.cmp.city).join(', '):'';
+      return `<label class="${ok?'':'off'}"><input type="checkbox" value="${x.replace(/"/g,'&quot;')}"
+        ${on?'checked':''} ${ok?'':'disabled'}>${x}${g?' <span class="hint">· '+g+'</span>':''}${ok?'':' — sin datos en '+S.cmp.city}</label>`;
+    }).join('') : '<div class="hint">(sin turnos)</div>';
+  document.querySelectorAll('#cTurnoList input').forEach(x=>x.addEventListener('change',()=>{
+    if(x.checked){ if(!S.cmp.turnos.includes(x.value)) S.cmp.turnos.push(x.value); }
+    else S.cmp.turnos=S.cmp.turnos.filter(t=>t!==x.value);
+    S.cmp.turnos.sort(turnoSort);
+    if(!S.cmp.turnos.length){ S.cmp.turnos=[x.value]; x.checked=true; }
+    updateCmpTurnoBtn(); render();
+  }));
+  document.getElementById('cTurnoCnt').textContent=`${S.cmp.turnos.length} de ${av.length} con datos`;
+  updateCmpTurnoBtn();
+}
+function updateCmpTurnoBtn(){
+  const b=document.getElementById('cTurnoBtn');
+  b.textContent = S.cmp.turnos.length===1 ? S.cmp.turnos[0] : `${S.cmp.turnos.length} turnos seleccionados`;
+  b.title=S.cmp.turnos.join(' · ');
 }
 function updateGrupoBtn(){
   const b=document.getElementById('fGrupoBtn');
@@ -964,22 +1108,32 @@ function updateTurnoBtn(){
     : `${S.turnos.length} turnos seleccionados`;
   b.title=S.turnos.join(' · ');
 }
-function activeDates(){ return S.periods.filter(p=>p.iso>=S.from&&p.iso<=S.to); }
+/* Un «lado» es un juego completo de filtros. A es el de arriba; B el del comparador.
+   Todo el motor de cálculo trabaja con lados, así que A y B son indistinguibles para él. */
+function LADO_A(){ return {city:S.city, turnos:S.turnos, grupos:S.gruposSel, from:S.from, to:S.to}; }
+function LADO_B(){ return {city:S.cmp.city, turnos:S.cmp.turnos, grupos:S.cmp.gruposSel,
+                           from:S.cmp.from, to:S.cmp.to}; }
+function activeDates(L){
+  L=L||LADO_A();
+  if(!L.from||!L.to) return [];   // un rango a medio construir no debe reventar el render
+  return S.periods.filter(p=>p.iso>=L.from&&p.iso<=L.to);
+}
 /* Combina los turnos seleccionados:
      · 'sum'   -> suma (Request, Total Wh)
      · 'wmean' -> media ponderada por el peso elegido (# Drivers) sobre los turnos
                   QUE TIENEN DATO en esa fecha. Si a alguno le falta el peso, esa
                   fecha cae a media simple y queda marcada (pond:false).
    Con un solo turno el resultado es exactamente el valor del archivo.          */
-function seriesOf(kid){
+function seriesOf(kid,L){
+  L=L||LADO_A();
   const lab=S.kpiMap[kid], k=KPIS.find(x=>x.id===kid);
-  if(!lab||!S.city||!S.turnos.length) return [];
+  if(!lab||!L.city||!L.turnos.length) return [];
   const wl=S.weightMap;
-  const src=paresActivos().map(([t,g])=>({
-    m:S.data.get(KEY(S.city,t,g,lab))||{},
-    w:wl?(S.data.get(KEY(S.city,t,g,wl))||{}):null
+  const src=paresActivos(L).map(([t,g])=>({
+    m:S.data.get(KEY(L.city,t,g,lab))||{},
+    w:wl?(S.data.get(KEY(L.city,t,g,wl))||{}):null
   }));
-  return activeDates().map(p=>{
+  return activeDates(L).map(p=>{
     let acc=0, wsum=0, plain=0, n=0, pond=(k.agg==='wmean'&&!!wl);
     for(const s of src){
       const v=s.m[p.iso]; if(v===undefined||!isFinite(v)) continue;
@@ -994,8 +1148,32 @@ function seriesOf(kid){
       else if(pond&&wsum>0) v=acc/wsum;
       else { v=plain/n; pond=false; }
     }
-    return {iso:p.iso, week:p.week, label:p.label, v, n, w:wsum, pond};
+    return {iso:p.iso, week:p.week, label:p.label, v, n, w:wsum, pond, pares:src.length};
   });
+}
+
+/* Serie de diferencia A − B. Con rangos de distinta longitud se alinean por
+   POSICIÓN (1ª fecha de A contra 1ª de B) y solo se comparan las posiciones que
+   existen en los dos. Si los dos rangos son el mismo, alinear por posición es
+   exactamente alinear por fecha, así que no se pierde nada en el caso normal. */
+function serieDif(sA,sB){
+  const n=Math.min(sA.length,sB.length), out=[];
+  for(let i=0;i<n;i++){
+    const a=sA[i], b=sB[i];
+    const dv=(a.v==null||b.v==null)?null:a.v-b.v;
+    out.push({iso:a.iso, week:a.week, label:a.label,
+              isoB:b.iso, weekB:b.week, labelB:b.label,
+              a:a.v, b:b.v, v:dv,
+              pct:(dv==null||!b.v)?null:100*dv/Math.abs(b.v)});
+  }
+  return out;
+}
+function cmpActivo(){ return S.cmp.on && S.cmp.city && S.cmp.turnos.length; }
+function mismasFechas(){ return S.from===S.cmp.from && S.to===S.cmp.to; }
+function ladoTxt(L){
+  const t=L.turnos.length===1?L.turnos[0]:`${L.turnos.length} turnos`;
+  const g=(S.colGrupo<0||!L.grupos.length)?'':' · '+L.grupos.join('+');
+  return `${L.city} · ${t}${g}`;
 }
 
 /* ---------- Render ------------------------------------------------------ */
@@ -1023,9 +1201,23 @@ function render(){
       ${S.weightMap?'«'+S.weightMap+'»':'—'}</b>; <b>Request</b> y <b>Total Wh</b> como <b>suma</b>.
       ${S.weightMap?'':'<br>No hay fila de peso asignada, así que los ratios salen como media simple: asígnala en el bloque de arriba («Peso para las medias»).'}</div>`;
   } else mn.innerHTML='';
+  const ci=document.getElementById('cmpInfo'), cw=document.getElementById('cmpWarn');
+  if(S.cmp.on && ci){
+    const sA=activeDates(LADO_A()).length, sB=activeDates(LADO_B()).length;
+    ci.textContent=`A = ${ladoTxt(LADO_A())} · ${sA} fecha${sA===1?'':'s'}   ·   `
+                  +`B = ${ladoTxt(LADO_B())} · ${sB} fecha${sB===1?'':'s'}`;
+    let w='';
+    if(!cmpActivo()) w='Elige al menos un turno en el lado B.';
+    else if(sA!==sB) w=`Los dos rangos no miden lo mismo (${sA} y ${sB} fechas). La diferencia `
+        +`solo se calcula sobre las ${Math.min(sA,sB)} primeras posiciones de cada uno, emparejadas por orden.`;
+    else if(!mismasFechas()) w='Rangos distintos pero de igual longitud: se emparejan por orden '
+        +'(1ª fecha de A con 1ª de B). El eje X muestra las fechas de A.';
+    cw.innerHTML = w?`<div class="method">${w}</div>`:'';
+  } else if(cw) cw.innerHTML='';
   renderTiles(); renderCards();
 }
 function renderTiles(){
+  if(cmpActivo()) return renderTilesCmp();
   const box=document.getElementById('tiles'); box.innerHTML='';
   KPIS.forEach(k=>{
     const s=seriesOf(k.id), withV=s.filter(p=>p.v!==null);
@@ -1047,6 +1239,102 @@ function renderTiles(){
       ${spark(withV.map(p=>p.v),k.hue)}`;
     box.appendChild(d);
   });
+}
+/* Recuadros en modo comparación: A, B y la brecha, sobre la última posición
+   que tiene dato en los dos lados. */
+function renderTilesCmp(){
+  const box=document.getElementById('tiles'); box.innerHTML='';
+  KPIS.forEach(k=>{
+    const sA=seriesOf(k.id,LADO_A()), sB=seriesOf(k.id,LADO_B());
+    const d=serieDif(sA,sB).filter(p=>p.v!==null);
+    const last=d[d.length-1];
+    const el=document.createElement('div'); el.className='tile';
+    const signo = last ? (last.v>0?'+':'') : '';
+    el.innerHTML=`<div class="lab"><span class="key" style="background:var(${k.hue})"></span>${k.label}</div>
+      <div class="val">${last?signo+fmtK(k.id,last.v):'—'}</div>
+      <div class="dlt">${last&&last.pct!==null?`${signo}${fmt(last.pct,1)} % sobre B`:'&nbsp;'}</div>
+      <div class="cmpcols">
+        <div>A<div class="n">${last?fmtK(k.id,last.a):'—'}</div></div>
+        <div>B<div class="n">${last?fmtK(k.id,last.b):'—'}</div></div>
+        <div>A − B<div class="n">${last?signo+fmtK(k.id,last.v):'—'}</div></div>
+      </div>
+      <div class="hint" style="margin-top:6px">${last?dFull(last.iso)+(last.week?' · '+last.week:''):'sin posiciones comparables'}</div>
+      ${spark(d.map(p=>p.v),k.hue)}`;
+    box.appendChild(el);
+  });
+}
+
+/* Gráfica genérica de una o varias series alineadas por posición.
+   series = [{pts:[{v,label,week,iso}], color:'--s1', nombre:'A'}]            */
+function chartN(k, series, opts){
+  opts=opts||{};
+  const holder=document.createElement('div'); holder.className='plot';
+  const tip=document.createElement('div'); tip.className='tip';
+  const W=Math.max(520,(document.querySelector('.wrap').clientWidth||900)-78);
+  const H=opts.alto||260, L=68, R=76, T=14, B=40, iw=W-L-R, ih=H-T-B;
+  const n=Math.max(...series.map(s=>s.pts.length));
+  const todos=[].concat(...series.map(s=>s.pts.filter(p=>p.v!==null).map(p=>p.v)));
+  if(!todos.length){ holder.innerHTML='<div class="empty">Sin valores comparables.</div>'; return holder; }
+  let mn=Math.min(...todos), mx=Math.max(...todos);
+  if(opts.cero){ mn=Math.min(mn,0); mx=Math.max(mx,0); }
+  const pad=(mx-mn)*.15||Math.abs(mx)*.1||1; mn-=pad; mx+=pad;
+  if(!opts.cero && Math.min(...todos)>=0 && mn<0) mn=0;
+  const ticks=niceTicks(mn,mx,4), y0=ticks[0], y1=ticks[ticks.length-1];
+  const tdec=Math.max(...ticks.map(t=>{const q=String(t),i=q.indexOf('.');return i<0?0:q.length-i-1;}));
+  const X=i=> n===1 ? L+iw/2 : L+i*(iw/(n-1));
+  const Y=v=> T+ih-(v-y0)/(y1-y0)*ih;
+  const camino=s=>{
+    const segs=[]; let cur=[];
+    s.pts.forEach((p,i)=>{ if(p.v===null){ if(cur.length>1) segs.push(cur); cur=[]; }
+                           else cur.push({x:X(i),y:Y(p.v)}); });
+    if(cur.length>1) segs.push(cur);
+    return segs.map(sg=>sg.map((q,i)=>(i?'L':'M')+q.x.toFixed(1)+' '+q.y.toFixed(1)).join(' ')).join(' ');
+  };
+  const ref=series[0].pts;
+  const step=Math.max(1,Math.ceil(n/9));
+  const idx=[...Array(n).keys()].filter(i=>i%step===0||i===n-1);
+  const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`); svg.setAttribute('width',W); svg.setAttribute('height',H);
+  svg.setAttribute('role','img'); svg.setAttribute('tabindex','0');
+  svg.setAttribute('aria-label',(opts.aria||k.label)+'. Los valores exactos están en la vista de tabla.');
+  svg.innerHTML=`
+    ${ticks.map(t=>`<line x1="${L}" x2="${L+iw}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}"
+        stroke="var(--grid)" stroke-width="1"/>
+      <text x="${L-10}" y="${(Y(t)+4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--text-muted)"
+        style="font-variant-numeric:tabular-nums">${fmt(t,tdec)}</text>`).join('')}
+    ${opts.cero&&y0<0&&y1>0?`<line x1="${L}" x2="${L+iw}" y1="${Y(0).toFixed(1)}" y2="${Y(0).toFixed(1)}"
+        stroke="var(--text-secondary)" stroke-width="1.5"/>`:''}
+    <line x1="${L}" x2="${L+iw}" y1="${T+ih}" y2="${T+ih}" stroke="var(--axis)" stroke-width="1"/>
+    ${series.map(s=>{
+      const d=camino(s);
+      return (d?`<path d="${d}" fill="none" stroke="var(${s.color})" stroke-width="2"
+          stroke-linejoin="round" stroke-linecap="round" ${s.raya?'stroke-dasharray="6 4"':''}/>`:'')
+        + s.pts.map((p,i)=>p.v===null?'':`<circle cx="${X(i).toFixed(1)}" cy="${Y(p.v).toFixed(1)}" r="3.5"
+            fill="var(${s.color})" stroke="var(--surface-1)" stroke-width="2"/>`).join('');
+    }).join('')}
+    ${idx.map(i=>`<text x="${X(i).toFixed(1)}" y="${H-22}" text-anchor="middle" font-size="11"
+        fill="var(--text-muted)">${(ref[i]||{}).label||''}</text>
+      ${(ref[i]||{}).week?`<text x="${X(i).toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="10"
+        fill="var(--text-muted)" opacity=".8">${ref[i].week}</text>`:''}`).join('')}
+    <line class="cross" x1="0" x2="0" y1="${T}" y2="${T+ih}" stroke="var(--axis)" stroke-width="1" opacity="0"/>`;
+  holder.appendChild(svg); holder.appendChild(tip);
+  const cross=svg.querySelector('.cross');
+  const mover=e=>{
+    const r=svg.getBoundingClientRect();
+    const x=(e.clientX-r.left)*(W/r.width);
+    let i=Math.round((x-L)/((iw)/(Math.max(1,n-1))));
+    i=Math.max(0,Math.min(n-1,i));
+    cross.setAttribute('x1',X(i)); cross.setAttribute('x2',X(i)); cross.setAttribute('opacity','1');
+    tip.innerHTML=`<b>${(ref[i]||{}).label||''}${(ref[i]||{}).week?' · '+ref[i].week:''}</b>`
+      + series.map(s=>`<div class="c"><span style="color:var(${s.color})">■</span> ${s.nombre}: `
+          +`<b>${s.pts[i]&&s.pts[i].v!==null?fmtK(k.id,s.pts[i].v):'—'}</b></div>`).join('');
+    tip.style.opacity='1';
+    tip.style.left=Math.min(Math.max(X(i)/W*r.width-70,4), r.width-150)+'px';
+    tip.style.top='6px';
+  };
+  svg.addEventListener('mousemove',mover);
+  svg.addEventListener('mouseleave',()=>{ cross.setAttribute('opacity','0'); tip.style.opacity='0'; });
+  return holder;
 }
 function spark(v,hue){
   if(v.length<2) return '<div style="height:34px"></div>';
@@ -1078,12 +1366,51 @@ function renderCards(){
         </div></div><div class="body"></div>`;
     const body=card.querySelector('.body');
     if(!lab) body.innerHTML='<div class="empty">Asigna este KPI en el bloque de arriba.</div>';
+    else if(cmpActivo()) pintarCmp(k,body);
     else if(!withV.length) body.innerHTML=`<div class="empty">Sin valores para ${S.city} · ${turnoTxt()} en este rango.</div>`;
     else if(S.view[k.id]==='chart') body.appendChild(chart(k,s));
     else body.appendChild(table(k,s));
     card.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{ S.view[k.id]=b.dataset.v; renderCards(); }));
     box.appendChild(card);
   });
+}
+/* Cuerpo de una tarjeta en modo comparación: A y B superpuestas, y debajo la
+   diferencia con el cero marcado. En vista Tabla, una fila por posición. */
+function pintarCmp(k,body){
+  const sA=seriesOf(k.id,LADO_A()), sB=seriesOf(k.id,LADO_B());
+  const d=serieDif(sA,sB);
+  if(!d.some(p=>p.v!==null)){
+    body.innerHTML='<div class="empty">No hay ninguna posición con dato en los dos lados.</div>';
+    return;
+  }
+  if(S.view[k.id]==='table'){ body.appendChild(tablaCmp(k,d)); return; }
+  const lg=document.createElement('div'); lg.className='lgnd';
+  lg.innerHTML=`<span><i style="background:var(--s1)"></i>A · ${ladoTxt(LADO_A())}</span>`
+              +`<span><i style="background:var(--s2)"></i>B · ${ladoTxt(LADO_B())}</span>`;
+  body.appendChild(lg);
+  body.appendChild(chartN(k,[
+    {pts:d.map(p=>({v:p.a,label:p.label,week:p.week})), color:'--s1', nombre:'A'},
+    {pts:d.map(p=>({v:p.b,label:p.labelB,week:p.weekB})), color:'--s2', nombre:'B', raya:true}
+  ],{aria:`${k.label}: A frente a B`}));
+  const h=document.createElement('div'); h.className='difhead';
+  h.textContent='Diferencia A − B';
+  body.appendChild(h);
+  body.appendChild(chartN(k,[
+    {pts:d.map(p=>({v:p.v,label:p.label,week:p.week})), color:'--s3', nombre:'A − B'}
+  ],{cero:true, alto:200, aria:`Diferencia de ${k.label} entre A y B`}));
+}
+function tablaCmp(k,d){
+  const w=document.createElement('div'); w.className='tblwrap';
+  w.innerHTML='<table><thead><tr><th>Fecha A</th><th>Fecha B</th><th>A</th><th>B</th>'
+    +'<th>A − B</th><th>%</th></tr></thead><tbody>'
+    + d.map(p=>`<tr><td>${dFull(p.iso)}${p.week?' · '+p.week:''}</td>`
+        +`<td>${dFull(p.isoB)}${p.weekB?' · '+p.weekB:''}</td>`
+        +`<td>${p.a===null?'—':fmtK(k.id,p.a)}</td>`
+        +`<td>${p.b===null?'—':fmtK(k.id,p.b)}</td>`
+        +`<td><b>${p.v===null?'—':(p.v>0?'+':'')+fmtK(k.id,p.v)}</b></td>`
+        +`<td>${p.pct===null?'—':(p.pct>0?'+':'')+fmt(p.pct,1)+' %'}</td></tr>`).join('')
+    + '</tbody></table>';
+  return w;
 }
 function table(k,s){
   const w=document.createElement('div'); w.className='tblwrap';
@@ -1213,7 +1540,7 @@ function exportSelfContained(){
   q('#errBox').className='card hidden';
   q('#drop').className='';
   q('#structWrap').className='card hidden';
-  ['#filterSec','#tilesSec','#cardsSec'].forEach(s=>q(s).className='hidden');
+  ['#filterSec','#cmpSec','#tilesSec','#cardsSec'].forEach(s=>q(s).className='hidden');
   q('#setup').setAttribute('open','');
   q('#pasteBox').className='hidden';
   const stamp=new Date().toLocaleString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
@@ -1221,7 +1548,7 @@ function exportSelfContained(){
     rows:S.matrix, name:S.name.replace(/ · copia.*$/,''), stamp,
     layout:S.layout, hdrRow:S.hdrRow, weekRow:S.weekRow, dateCols:S.dateCols,
     colCity:S.colCity, colTurno:S.colTurno, colKpi:S.colKpi, colDate:S.colDate, colWeek:S.colWeek,
-    colGrupo:S.colGrupo, gruposSel:S.gruposSel,
+    colGrupo:S.colGrupo, gruposSel:S.gruposSel, cmp:S.cmp,
     mode:S.mode, kpiMap:S.kpiMap, weightMap:S.weightMap,
     city:S.city, turnos:S.turnos, from:S.from, to:S.to
   };
@@ -1245,6 +1572,7 @@ function bootBaked(d){
   S.colCity=d.colCity; S.colTurno=d.colTurno; S.colKpi=d.colKpi;
   S.colGrupo=(d.colGrupo===undefined?-1:d.colGrupo);
   S.gruposSel=(d.gruposSel||[]).slice();
+  if(d.cmp) S.cmp=Object.assign({on:false,city:null,turnos:[],gruposSel:[],from:null,to:null},d.cmp);
   S.colDate=d.colDate; S.colWeek=d.colWeek;
   S.mode=d.mode; S.modeAuto=d.mode; S.kpiMap=d.kpiMap||{}; S.weightMap=d.weightMap||'';
   if(d.turnos) S.turnos=d.turnos.slice();
@@ -1254,6 +1582,8 @@ function bootBaked(d){
   const keep=(d.turnos||[]).filter(t=>av.includes(t));
   if(keep.length) S.turnos=keep;
   buildGrupoUI(); buildTurnoUI();
+  el('cmpOn').checked=!!S.cmp.on;
+  el('cmpBox').classList.toggle('hidden',!S.cmp.on);
   const isos=S.periods.map(p=>p.iso);
   if(isos.includes(d.from)&&isos.includes(d.to)){ S.from=d.from; S.to=d.to; }
   buildFilterUI(); render();
@@ -1310,16 +1640,51 @@ el('fTurnoNone').addEventListener('click',()=>{
   buildTurnoUI(); render();
 });
 el('fTurnoPanel').addEventListener('click',e=>e.stopPropagation());
-document.addEventListener('click',()=>{
+function cerrarPaneles(){
   if(!el('fTurnoPanel').classList.contains('hidden')) turnoPanelOpen(false);
   if(!el('fGrupoPanel').classList.contains('hidden')) grupoPanelOpen(false);
+  el('cGrupoPanel').classList.add('hidden');
+  el('cTurnoPanel').classList.add('hidden');
+}
+document.addEventListener('click',cerrarPaneles);
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') cerrarPaneles(); });
+/* --- comparador --- */
+el('cmpOn').addEventListener('change',e=>{
+  S.cmp.on=e.target.checked;
+  el('cmpBox').classList.toggle('hidden',!S.cmp.on);
+  if(S.cmp.on) buildCmpUI();
+  render();
 });
-document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ turnoPanelOpen(false); grupoPanelOpen(false); } });
+el('cCity').addEventListener('change',e=>{ S.cmp.city=e.target.value; buildCmpGrupoUI(); buildCmpTurnoUI(); render(); });
+function cmpPanel(id,btn,v,build){
+  el(id).classList.toggle('hidden',!v);
+  el(btn).setAttribute('aria-expanded',v?'true':'false');
+  if(v) build();
+}
+el('cGrupoBtn').addEventListener('click',e=>{ e.stopPropagation();
+  cmpPanel('cGrupoPanel','cGrupoBtn', el('cGrupoPanel').classList.contains('hidden'), buildCmpGrupoUI); });
+el('cTurnoBtn').addEventListener('click',e=>{ e.stopPropagation();
+  cmpPanel('cTurnoPanel','cTurnoBtn', el('cTurnoPanel').classList.contains('hidden'), buildCmpTurnoUI);
+  if(!el('cTurnoPanel').classList.contains('hidden')){ el('cTurnoSearch').value=''; el('cTurnoSearch').focus(); } });
+el('cGrupoPanel').addEventListener('click',e=>e.stopPropagation());
+el('cTurnoPanel').addEventListener('click',e=>e.stopPropagation());
+el('cTurnoSearch').addEventListener('input',buildCmpTurnoUI);
+el('cGrupoAll').addEventListener('click',()=>{ S.cmp.gruposSel=[]; buildCmpGrupoUI(); buildCmpTurnoUI(); render(); });
+el('cTurnoAll').addEventListener('click',()=>{ S.cmp.turnos=availTurnos(LADO_B()).slice(); buildCmpTurnoUI(); render(); });
+el('cTurnoNone').addEventListener('click',()=>{ const av=availTurnos(LADO_B()); S.cmp.turnos=av.length?[av[0]]:[]; buildCmpTurnoUI(); render(); });
+el('cFrom').addEventListener('change',e=>{ S.cmp.from=e.target.value;
+  if(S.cmp.from>S.cmp.to){ S.cmp.to=S.cmp.from; el('cTo').value=S.cmp.to; } render(); });
+el('cTo').addEventListener('change',e=>{ S.cmp.to=e.target.value;
+  if(S.cmp.to<S.cmp.from){ S.cmp.from=S.cmp.to; el('cFrom').value=S.cmp.from; } render(); });
+el('cIgual').addEventListener('click',()=>{ S.cmp.from=S.from; S.cmp.to=S.to;
+  el('cFrom').value=S.from; el('cTo').value=S.to; render(); });
+
 el('fFrom').addEventListener('change',e=>{ S.from=e.target.value; if(S.from>S.to){S.to=S.from;el('fTo').value=S.to;} render(); });
 el('fTo').addEventListener('change',e=>{ S.to=e.target.value; if(S.to<S.from){S.from=S.to;el('fFrom').value=S.from;} render(); });
-document.querySelectorAll('.presets button').forEach(b=>b.addEventListener('click',()=>{
+document.querySelectorAll('#filterSec .presets button').forEach(b=>b.addEventListener('click',()=>{
   const isos=S.periods.map(p=>p.iso); if(!isos.length) return;
   const p=b.dataset.p;
+  if(!p) return;                 // salvaguarda: sin data-p no hay rango que aplicar
   S.from = p==='all' ? isos[0] : isos[Math.max(0,isos.length-(+p))];
   S.to=isos[isos.length-1]; el('fFrom').value=S.from; el('fTo').value=S.to; render();
 }));
